@@ -1,11 +1,11 @@
 /*
- * Copyright 2016 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,13 +16,12 @@
 
 package org.springframework.amqp.support.converter;
 
-import java.io.IOException;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-import org.springframework.util.PatternMatchUtils;
+import org.springframework.amqp.utils.SerializationUtils;
 
 /**
  * MessageConverters that potentially use Java deserialization.
@@ -58,21 +57,8 @@ public abstract class WhiteListDeserializingMessageConverter extends AbstractMes
 		Collections.addAll(this.whiteListPatterns, patterns);
 	}
 
-	protected void checkWhiteList(Class<?> clazz) throws IOException {
-		if (this.whiteListPatterns.isEmpty()) {
-			return;
-		}
-		if (clazz.isArray() || clazz.isPrimitive() || clazz.equals(String.class)
-				|| Number.class.isAssignableFrom(clazz)) {
-			return;
-		}
-		String className = clazz.getName();
-		for (String pattern : this.whiteListPatterns) {
-			if (PatternMatchUtils.simpleMatch(pattern, className)) {
-				return;
-			}
-		}
-		throw new SecurityException("Attempt to deserialize unauthorized " + clazz);
+	protected void checkWhiteList(Class<?> clazz) {
+		SerializationUtils.checkWhiteList(clazz, this.whiteListPatterns);
 	}
 
 }

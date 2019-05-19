@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,10 @@
 
 package org.springframework.amqp.core;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.HashSet;
+import java.util.Set;
 
 import org.junit.Test;
 
@@ -26,22 +27,27 @@ import org.junit.Test;
 /**
  * @author Dave Syer
  * @author Artem Yakshin
+ * @author Artem Bilan
+ * @author Gary Russell
+ * @author Csaba Soti
  *
  */
 public class MessagePropertiesTests {
 
+
+
 	@Test
-	public void testReplyTo() throws Exception {
+	public void testReplyTo() {
 		MessageProperties properties = new MessageProperties();
 		properties.setReplyTo("foo/bar");
-		assertEquals("bar", properties.getReplyToAddress().getRoutingKey());
+		assertThat(properties.getReplyToAddress().getRoutingKey()).isEqualTo("bar");
 	}
 
 	@Test
-	public void testReplyToNullByDefault() throws Exception {
+	public void testReplyToNullByDefault() {
 		MessageProperties properties = new MessageProperties();
-		assertEquals(null, properties.getReplyTo());
-		assertEquals(null, properties.getReplyToAddress());
+		assertThat(properties.getReplyTo()).isEqualTo(null);
+		assertThat(properties.getReplyToAddress()).isEqualTo(null);
 	}
 
 	@Test
@@ -49,16 +55,30 @@ public class MessagePropertiesTests {
 		MessageProperties properties = new MessageProperties();
 		Integer delay = 100;
 		properties.setDelay(delay);
-		assertEquals(delay, properties.getHeaders().get(MessageProperties.X_DELAY));
+		assertThat(properties.getHeaders().get(MessageProperties.X_DELAY)).isEqualTo(delay);
 		properties.setDelay(null);
-		assertFalse(properties.getHeaders().containsKey(MessageProperties.X_DELAY));
+		assertThat(properties.getHeaders().containsKey(MessageProperties.X_DELAY)).isFalse();
 	}
 
 	@Test
 	public void testContentLengthSet() {
 		MessageProperties properties = new MessageProperties();
 		properties.setContentLength(1L);
-		assertTrue(properties.isContentLengthSet());
+		assertThat(properties.isContentLengthSet()).isTrue();
 	}
+
+	@Test
+	public void tesNoNullPointerInEquals() {
+		MessageProperties mp = new MessageProperties();
+		MessageProperties mp2 = new MessageProperties();
+		assertThat(mp.equals(mp2)).isTrue();
+	}
+
+	 @Test
+	  public void tesNoNullPointerInHashCode() {
+	    Set<MessageProperties> messageList = new HashSet<>();
+	    messageList.add(new MessageProperties());
+	    assertThat(messageList).hasSize(1);
+	  }
 
 }

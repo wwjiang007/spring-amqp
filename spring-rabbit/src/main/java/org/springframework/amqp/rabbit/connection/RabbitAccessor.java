@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,13 +16,12 @@
 
 package org.springframework.amqp.rabbit.connection;
 
-import java.io.IOException;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import org.springframework.amqp.rabbit.support.RabbitExceptionTranslator;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 
 import com.rabbitmq.client.Channel;
@@ -78,10 +77,9 @@ public abstract class RabbitAccessor implements InitializingBean {
 	/**
 	 * Create a RabbitMQ Connection via this template's ConnectionFactory and its host and port values.
 	 * @return the new RabbitMQ Connection
-	 * @throws IOException if thrown by RabbitMQ API methods
 	 * @see ConnectionFactory#createConnection
 	 */
-	protected Connection createConnection() throws IOException {
+	protected Connection createConnection() {
 		return this.connectionFactory.createConnection();
 	}
 
@@ -91,6 +89,7 @@ public abstract class RabbitAccessor implements InitializingBean {
 	 * @param holder the RabbitResourceHolder
 	 * @return an appropriate Connection fetched from the holder, or <code>null</code> if none found
 	 */
+	@Nullable
 	protected Connection getConnection(RabbitResourceHolder holder) {
 		return holder.getConnection();
 	}
@@ -101,6 +100,7 @@ public abstract class RabbitAccessor implements InitializingBean {
 	 * @param holder the RabbitResourceHolder
 	 * @return an appropriate Channel fetched from the holder, or <code>null</code> if none found
 	 */
+	@Nullable
 	protected Channel getChannel(RabbitResourceHolder holder) {
 		return holder.getChannel();
 	}

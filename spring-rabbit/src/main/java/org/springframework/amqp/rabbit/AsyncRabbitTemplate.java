@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-2017 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -31,11 +31,13 @@ import org.springframework.amqp.core.Address;
 import org.springframework.amqp.core.AmqpMessageReturnedException;
 import org.springframework.amqp.core.AmqpReplyTimeoutException;
 import org.springframework.amqp.core.AsyncAmqpTemplate;
+import org.springframework.amqp.core.Correlation;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
-import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
+import org.springframework.amqp.rabbit.connection.PublisherCallbackChannel;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.core.RabbitTemplate.ConfirmCallback;
 import org.springframework.amqp.rabbit.core.RabbitTemplate.ReturnCallback;
@@ -43,15 +45,16 @@ import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer
 import org.springframework.amqp.rabbit.listener.DirectReplyToMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.DirectReplyToMessageListenerContainer.ChannelHolder;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
-import org.springframework.amqp.rabbit.support.CorrelationData;
-import org.springframework.amqp.rabbit.support.PublisherCallbackChannel;
-import org.springframework.amqp.support.Correlation;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.amqp.support.converter.SmartMessageConverter;
+import org.springframework.amqp.utils.JavaUtils;
 import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.expression.Expression;
+import org.springframework.lang.NonNull;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.util.Assert;
@@ -101,11 +104,9 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 
 	private final String replyAddress;
 
-	@SuppressWarnings("rawtypes")
-	private final ConcurrentMap<String, RabbitFuture> pending = new ConcurrentHashMap<String, RabbitFuture>();
+	private final ConcurrentMap<String, RabbitFuture<?>> pending = new ConcurrentHashMap<>();
 
-	@SuppressWarnings("rawtypes")
-	private final CorrelationMessagePostProcessor messagePostProcessor = new CorrelationMessagePostProcessor<>();
+	private final CorrelationMessagePostProcessor<?> messagePostProcessor = new CorrelationMessagePostProcessor<>();
 
 	private volatile boolean running;
 
@@ -157,6 +158,10 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 		this.template.setExchange(exchange == null ? "" : exchange);
 		this.template.setRoutingKey(routingKey);
 		this.container = new SimpleMessageListenerContainer(connectionFactory);
+		JavaUtils.INSTANCE
+				.acceptIfNotNull(this.template.getAfterReceivePostProcessors(),
+						(value) -> this.container.setAfterReceivePostProcessors(
+								value.toArray(new MessagePostProcessor[0])));
 		this.container.setQueueNames(replyQueue);
 		this.container.setMessageListener(this);
 		this.container.afterPropertiesSet();
@@ -216,15 +221,10 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 	 * @since 2.0
 	 */
 	public AsyncRabbitTemplate(ConnectionFactory connectionFactory, String exchange, String routingKey) {
-		Assert.notNull(connectionFactory, "'connectionFactory' cannot be null");
+		this(new RabbitTemplate(connectionFactory));
 		Assert.notNull(routingKey, "'routingKey' cannot be null");
-		this.template = new RabbitTemplate(connectionFactory);
 		this.template.setExchange(exchange == null ? "" : exchange);
 		this.template.setRoutingKey(routingKey);
-		this.container = null;
-		this.replyAddress = null;
-		this.directReplyToContainer = new DirectReplyToMessageListenerContainer(this.template.getConnectionFactory());
-		this.directReplyToContainer.setChannelAwareMessageListener(this);
 	}
 
 	/**
@@ -239,7 +239,11 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 		this.container = null;
 		this.replyAddress = null;
 		this.directReplyToContainer = new DirectReplyToMessageListenerContainer(this.template.getConnectionFactory());
-		this.directReplyToContainer.setChannelAwareMessageListener(this);
+		JavaUtils.INSTANCE
+				.acceptIfNotNull(template.getAfterReceivePostProcessors(),
+						(value) -> this.directReplyToContainer.setAfterReceivePostProcessors(
+								value.toArray(new MessagePostProcessor[0])));
+		this.directReplyToContainer.setMessageListener(this);
 	}
 
 	/**
@@ -346,6 +350,15 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 	 */
 	public MessageConverter getMessageConverter() {
 		return this.template.getMessageConverter();
+	}
+
+	/**
+	 * Return the underlying {@link RabbitTemplate} used for sending.
+	 * @return the template.
+	 * @since 2.2
+	 */
+	public RabbitTemplate getRabbitTemplate() {
+		return this.template;
 	}
 
 	@Override
@@ -573,9 +586,9 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 						RabbitConverterFuture<Object> rabbitFuture = (RabbitConverterFuture<Object>) future;
 						Object converted = rabbitFuture.getReturnType() != null
 								&& messageConverter instanceof SmartMessageConverter
-										? ((SmartMessageConverter) messageConverter).fromMessage(message,
-												rabbitFuture.getReturnType())
-										: messageConverter.fromMessage(message);
+								? ((SmartMessageConverter) messageConverter).fromMessage(message,
+								rabbitFuture.getReturnType())
+								: messageConverter.fromMessage(message);
 						rabbitFuture.set(converted);
 					}
 					else {
@@ -610,7 +623,7 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 	}
 
 	@Override
-	public void confirm(CorrelationData correlationData, boolean ack, String cause) {
+	public void confirm(@NonNull CorrelationData correlationData, boolean ack, @Nullable String cause) {
 		if (this.logger.isDebugEnabled()) {
 			this.logger.debug("Confirm: " + correlationData + ", ack=" + ack
 					+ (cause == null ? "" : (", cause: " + cause)));
@@ -689,7 +702,8 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 			}
 			AsyncRabbitTemplate.this.pending.remove(this.correlationId);
 			if (this.channelHolder != null && AsyncRabbitTemplate.this.directReplyToContainer != null) {
-				AsyncRabbitTemplate.this.directReplyToContainer.releaseConsumerFor(this.channelHolder, false, null);
+				AsyncRabbitTemplate.this.directReplyToContainer
+						.releaseConsumerFor(this.channelHolder, false, null); // NOSONAR
 			}
 			return super.cancel(mayInterruptIfRunning);
 		}
@@ -744,7 +758,7 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 				if (RabbitFuture.this.channelHolder != null
 						&& AsyncRabbitTemplate.this.directReplyToContainer != null) {
 					AsyncRabbitTemplate.this.directReplyToContainer
-							.releaseConsumerFor(RabbitFuture.this.channelHolder, false, null);
+							.releaseConsumerFor(RabbitFuture.this.channelHolder, false, null); // NOSONAR
 				}
 				setException(new AmqpReplyTimeoutException("Reply timed out", RabbitFuture.this.requestMessage));
 			}
@@ -757,7 +771,7 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 	 * A {@link RabbitFuture} with a return type of {@link Message}.
 	 * @since 1.6
 	 */
-	public class RabbitMessageFuture extends RabbitFuture<Message> implements ListenableFuture<Message> {
+	public class RabbitMessageFuture extends RabbitFuture<Message> {
 
 		public RabbitMessageFuture(String correlationId, Message requestMessage) {
 			super(correlationId, requestMessage);
@@ -771,7 +785,7 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 	 * @param <C> the type.
 	 * @since 1.6
 	 */
-	public class RabbitConverterFuture<C> extends RabbitFuture<C> implements ListenableFuture<C> {
+	public class RabbitConverterFuture<C> extends RabbitFuture<C> {
 
 		private volatile ParameterizedTypeReference<C> returnType;
 
@@ -833,6 +847,7 @@ public class AsyncRabbitTemplate implements AsyncAmqpTemplate, ChannelAwareMessa
 
 		AsyncCorrelationData(MessagePostProcessor userPostProcessor, ParameterizedTypeReference<C> returnType,
 				boolean enableConfirms) {
+
 			this.userPostProcessor = userPostProcessor;
 			this.returnType = returnType;
 			this.enableConfirms = enableConfirms;

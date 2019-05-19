@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,9 +23,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import org.springframework.amqp.AmqpIOException;
-import org.springframework.amqp.AmqpRejectAndDontRequeueException;
-import org.springframework.amqp.rabbit.listener.MessageRejectedWhileStoppingException;
 import org.springframework.amqp.rabbit.support.RabbitExceptionTranslator;
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 
 import com.rabbitmq.client.AMQP;
@@ -39,21 +38,55 @@ import com.rabbitmq.client.impl.recovery.AutorecoveringChannel;
  * @author Mark Fisher
  * @author Mark Pollack
  * @author Gary Russell
+ * @author Artem Bilan
  */
 public abstract class RabbitUtils {
 
-	public static final int DEFAULT_PORT = AMQP.PROTOCOL.PORT;
+	/**
+	 * AMQP declare method.
+	 */
+	public static final int DECLARE_METHOD_ID_10 = 10;
 
-	private static final Log logger = LogFactory.getLog(RabbitUtils.class);
+	/**
+	 * AMQP consume method.
+	 */
+	public static final int CONSUME_METHOD_ID_20 = 20;
 
-	private static final ThreadLocal<Boolean> physicalCloseRequired = new ThreadLocal<Boolean>();
+	/**
+	 * AMQP exchange class id.
+	 */
+	public static final int EXCHANGE_CLASS_ID_40 = 40;
+
+	/**
+	 * AMQP queue class id.
+	 */
+	public static final int QUEUE_CLASS_ID_50 = 50;
+
+	/**
+	 * AMQP basic class id.
+	 */
+	public static final int BASIC_CLASS_ID_60 = 60;
+
+	/**
+	 * AMQP Connection protocol class id.
+	 */
+	public static final int CONNECTION_PROTOCOL_CLASS_ID_10 = 10;
+
+	/**
+	 * AMQP Channel protocol class id.
+	 */
+	public static final int CHANNEL_PROTOCOL_CLASS_ID_20 = 20;
+
+	private static final Log logger = LogFactory.getLog(RabbitUtils.class); // NOSONAR - lower case
+
+	private static final ThreadLocal<Boolean> physicalCloseRequired = new ThreadLocal<>(); // NOSONAR - lower case
 
 	/**
 	 * Close the given RabbitMQ Connection and ignore any thrown exception. This is useful for typical
 	 * <code>finally</code> blocks in manual RabbitMQ code.
 	 * @param connection the RabbitMQ Connection to close (may be <code>null</code>)
 	 */
-	public static void closeConnection(Connection connection) {
+	public static void closeConnection(@Nullable Connection connection) {
 		if (connection != null) {
 			try {
 				connection.close();
@@ -72,7 +105,7 @@ public abstract class RabbitUtils {
 	 * blocks in manual RabbitMQ code.
 	 * @param channel the RabbitMQ Channel to close (may be <code>null</code>)
 	 */
-	public static void closeChannel(Channel channel) {
+	public static void closeChannel(@Nullable Channel channel) {
 		if (channel != null) {
 			try {
 				channel.close();
@@ -126,19 +159,7 @@ public abstract class RabbitUtils {
 		}
 		try {
 			for (String consumerTag : consumerTags) {
-				try {
-					channel.basicCancel(consumerTag);
-				}
-				catch (IOException e) {
-					if (logger.isDebugEnabled()) {
-						logger.debug("Error performing 'basicCancel'", e);
-					}
-				}
-				catch (AlreadyClosedException e) {
-					if (logger.isTraceEnabled()) {
-						logger.trace(channel + " is already closed");
-					}
-				}
+				cancel(channel, consumerTag);
 			}
 			if (transactional) {
 				/*
@@ -157,9 +178,24 @@ public abstract class RabbitUtils {
 		}
 	}
 
+	private static void cancel(Channel channel, String consumerTag) {
+		try {
+			channel.basicCancel(consumerTag);
+		}
+		catch (IOException e) {
+			if (logger.isDebugEnabled()) {
+				logger.debug("Error performing 'basicCancel'", e);
+			}
+		}
+		catch (AlreadyClosedException e) {
+			if (logger.isTraceEnabled()) {
+				logger.trace(channel + " is already closed");
+			}
+		}
+	}
+
 	/**
 	 * Declare to that broker that a channel is going to be used transactionally, and convert exceptions that arise.
-	 *
 	 * @param channel the channel to use
 	 */
 	public static void declareTransactional(Channel channel) {
@@ -232,11 +268,11 @@ public abstract class RabbitUtils {
 	 */
 	public static boolean isPassiveDeclarationChannelClose(ShutdownSignalException sig) {
 		Method shutdownReason = sig.getReason();
-		return shutdownReason instanceof AMQP.Channel.Close
+		return shutdownReason instanceof AMQP.Channel.Close // NOSONAR boolean complexity
 				&& AMQP.NOT_FOUND == ((AMQP.Channel.Close) shutdownReason).getReplyCode()
-				&& ((((AMQP.Channel.Close) shutdownReason).getClassId() == 40 // exchange
-					|| ((AMQP.Channel.Close) shutdownReason).getClassId() == 50) // queue
-					&& ((AMQP.Channel.Close) shutdownReason).getMethodId() == 10); // declare
+				&& ((((AMQP.Channel.Close) shutdownReason).getClassId() == EXCHANGE_CLASS_ID_40
+					|| ((AMQP.Channel.Close) shutdownReason).getClassId() == QUEUE_CLASS_ID_50)
+					&& ((AMQP.Channel.Close) shutdownReason).getMethodId() == DECLARE_METHOD_ID_10);
 	}
 
 	/**
@@ -248,10 +284,10 @@ public abstract class RabbitUtils {
 	 */
 	public static boolean isExclusiveUseChannelClose(ShutdownSignalException sig) {
 		Method shutdownReason = sig.getReason();
-		return shutdownReason instanceof AMQP.Channel.Close
+		return shutdownReason instanceof AMQP.Channel.Close // NOSONAR boolean complexity
 				&& AMQP.ACCESS_REFUSED == ((AMQP.Channel.Close) shutdownReason).getReplyCode()
-				&& ((AMQP.Channel.Close) shutdownReason).getClassId() == 60 // basic
-				&& ((AMQP.Channel.Close) shutdownReason).getMethodId() == 20 // consume
+				&& ((AMQP.Channel.Close) shutdownReason).getClassId() == BASIC_CLASS_ID_60
+				&& ((AMQP.Channel.Close) shutdownReason).getMethodId() == CONSUME_METHOD_ID_20
 				&& ((AMQP.Channel.Close) shutdownReason).getReplyText().contains("exclusive");
 	}
 
@@ -280,8 +316,8 @@ public abstract class RabbitUtils {
 			Method shutdownReason = sig.getReason();
 			return shutdownReason instanceof AMQP.Channel.Close
 					&& AMQP.PRECONDITION_FAILED == ((AMQP.Channel.Close) shutdownReason).getReplyCode()
-					&& ((AMQP.Channel.Close) shutdownReason).getClassId() == 50 // queue
-					&& ((AMQP.Channel.Close) shutdownReason).getMethodId() == 10; // declare
+					&& ((AMQP.Channel.Close) shutdownReason).getClassId() == QUEUE_CLASS_ID_50
+					&& ((AMQP.Channel.Close) shutdownReason).getMethodId() == DECLARE_METHOD_ID_10;
 		}
 	}
 
@@ -310,35 +346,27 @@ public abstract class RabbitUtils {
 			Method shutdownReason = sig.getReason();
 			return shutdownReason instanceof AMQP.Connection.Close
 					&& AMQP.COMMAND_INVALID == ((AMQP.Connection.Close) shutdownReason).getReplyCode()
-					&& ((AMQP.Connection.Close) shutdownReason).getClassId() == 40 // exchange
-					&& ((AMQP.Connection.Close) shutdownReason).getMethodId() == 10; // declare
+					&& ((AMQP.Connection.Close) shutdownReason).getClassId() == EXCHANGE_CLASS_ID_40
+					&& ((AMQP.Connection.Close) shutdownReason).getMethodId() == DECLARE_METHOD_ID_10;
 		}
 	}
 
 	/**
-	 * Determine whether a message should be requeued; returns true if the throwable is a
-	 * {@link MessageRejectedWhileStoppingException} or defaultRequeueRejected is true and
-	 * there is not an {@link AmqpRejectAndDontRequeueException} in the cause chain.
-	 * @param defaultRequeueRejected the default requeue rejected.
-	 * @param throwable the throwable.
-	 * @param logger the logger to use for debug.
-	 * @return true to requeue.
-	 * @since 2.0
+	 * Return the negotiated frame_max.
+	 * @param connectionFactory the connection factory.
+	 * @return the size or -1 if it cannot be determined.
 	 */
-	public static boolean shouldRequeue(boolean defaultRequeueRejected, Throwable throwable, Log logger) {
-		boolean shouldRequeue = defaultRequeueRejected ||
-				throwable instanceof MessageRejectedWhileStoppingException;
-		Throwable t = throwable;
-		while (shouldRequeue && t != null) {
-			if (t instanceof AmqpRejectAndDontRequeueException) {
-				shouldRequeue = false;
+	public static int getMaxFrame(ConnectionFactory connectionFactory) {
+		try (Connection	connection = connectionFactory.createConnection()) {
+			com.rabbitmq.client.Connection rcon = connection.getDelegate();
+			if (rcon != null) {
+				return rcon.getFrameMax();
 			}
-			t = t.getCause();
 		}
-		if (logger.isDebugEnabled()) {
-			logger.debug("Rejecting messages (requeue=" + shouldRequeue + ")");
+		catch (@SuppressWarnings("unused") RuntimeException e) {
+			// NOSONAR
 		}
-		return shouldRequeue;
+		return -1;
 	}
 
 }

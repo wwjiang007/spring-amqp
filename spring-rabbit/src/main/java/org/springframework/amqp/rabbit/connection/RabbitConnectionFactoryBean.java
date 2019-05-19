@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,7 @@
 
 package org.springframework.amqp.rabbit.connection;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.security.KeyManagementException;
@@ -23,6 +24,8 @@ import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Properties;
@@ -36,12 +39,11 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-
+import org.springframework.amqp.rabbit.support.RabbitExceptionTranslator;
 import org.springframework.beans.factory.config.AbstractFactoryBean;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.lang.Nullable;
 import org.springframework.util.StringUtils;
 
 import com.rabbitmq.client.ConnectionFactory;
@@ -52,21 +54,23 @@ import com.rabbitmq.client.SocketConfigurator;
 import com.rabbitmq.client.impl.nio.NioParams;
 
 /**
- * Factory bean to create a RabbitMQ ConnectionFactory, delegating most
- * setter methods and optionally enabling SSL, with or without
- * certificate validation. When {@link #setSslPropertiesLocation(Resource) sslPropertiesLocation}
- * is not null, the default implementation loads a {@code PKCS12} keystore and a
- * {@code JKS} truststore using the supplied properties and intializes {@code SunX509} key
- * and trust manager factories. These are then used to initialize an {@link SSLContext}
- * using the {@link #setSslAlgorithm(String) sslAlgorithm} (default TLSv1.1).
+ * Factory bean to create a RabbitMQ ConnectionFactory, delegating most setter methods and
+ * optionally enabling SSL, with or without certificate validation. When
+ * {@link #setSslPropertiesLocation(Resource) sslPropertiesLocation} is not null, the
+ * default implementation loads a {@code PKCS12} keystore and a {@code JKS} truststore
+ * using the supplied properties and intializes key and trust manager factories, using
+ * algorithm {@code SunX509} by default. These are then used to initialize an
+ * {@link SSLContext} using the {@link #setSslAlgorithm(String) sslAlgorithm} (default
+ * TLSv1.1).
  * <p>
- * Override {@link #createSSLContext()} to create and/or perform further modification of the context.
+ * Override {@link #createSSLContext()} to create and/or perform further modification of
+ * the context.
  * <p>
  * Override {@link #setUpSSL()} to take complete control over setting up SSL.
  *
  * @author Gary Russell
  * @author Heath Abelson
- * @author Arnaud Cogoluègnes
+ * @author Arnaud Cogolu?gnes
  * @author Hareendran
  * @author Dominique Villard
  * @author Zachary DeLuca
@@ -75,7 +79,7 @@ import com.rabbitmq.client.impl.nio.NioParams;
  */
 public class RabbitConnectionFactoryBean extends AbstractFactoryBean<ConnectionFactory> {
 
-	private final Log logger = LogFactory.getLog(getClass());
+	private static final String SUN_X509 = "SunX509";
 
 	private static final String KEY_STORE = "keyStore";
 
@@ -95,37 +99,45 @@ public class RabbitConnectionFactoryBean extends AbstractFactoryBean<ConnectionF
 
 	private static final String TRUST_STORE_DEFAULT_TYPE = "JKS";
 
-	protected final ConnectionFactory connectionFactory = new ConnectionFactory();
+	protected final ConnectionFactory connectionFactory = new ConnectionFactory(); // NOSONAR
 
 	private final Properties sslProperties = new Properties();
+
+	private final PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
 
 	private boolean useSSL;
 
 	private Resource sslPropertiesLocation;
 
-	private volatile String keyStore;
+	private String keyStore;
 
-	private volatile String trustStore;
+	private String trustStore;
 
-	private volatile Resource keyStoreResource;
+	private Resource keyStoreResource;
 
-	private volatile Resource trustStoreResource;
+	private Resource trustStoreResource;
 
-	private volatile String keyStorePassphrase;
+	private String keyStorePassphrase;
 
-	private volatile String trustStorePassphrase;
+	private String trustStorePassphrase;
 
-	private volatile String keyStoreType;
+	private String keyStoreType;
 
-	private volatile String trustStoreType;
+	private String trustStoreType;
 
-	private volatile String sslAlgorithm = TLS_V1_1;
+	private String sslAlgorithm = TLS_V1_1;
 
-	private volatile boolean sslAlgorithmSet;
+	private boolean sslAlgorithmSet;
 
-	private volatile SecureRandom secureRandom;
+	private SecureRandom secureRandom;
 
 	private boolean skipServerCertificateValidation;
+
+	private boolean enableHostnameVerification = true;
+
+	private String keyStoreAlgorithm = SUN_X509;
+
+	private String trustStoreAlgorithm = SUN_X509;
 
 	public RabbitConnectionFactoryBean() {
 		this.connectionFactory.setAutomaticRecoveryEnabled(false);
@@ -604,13 +616,65 @@ public class RabbitConnectionFactoryBean extends AbstractFactoryBean<ConnectionF
 		this.connectionFactory.setChannelRpcTimeout(channelRpcTimeout);
 	}
 
+	/**
+	 * Enable server hostname verification for TLS connections.
+	 * <p>
+	 * This enables hostname verification regardless of the IO mode used (blocking or
+	 * non-blocking IO).
+	 * <p>
+	 * This can be called typically after setting the {@link SSLContext} with one of the
+	 * <code>useSslProtocol</code> methods. Requires amqp-client 5.4.0 or later.
+	 * @param enable false to disable.
+	 * @since 2.0.6
+	 * @see com.rabbitmq.client.ConnectionFactory#enableHostnameVerification()
+	 */
+	public void setEnableHostnameVerification(boolean enable) {
+		this.enableHostnameVerification = enable;
+	}
+
+	protected String getKeyStoreAlgorithm() {
+		return this.keyStoreAlgorithm;
+	}
+
+	/**
+	 * Set the algorithm used when creating the key store, default {@code SunX509}.
+	 * @param keyStoreAlgorithm the algorithm.
+	 * @since 2.1.6
+	 */
+	public void setKeyStoreAlgorithm(String keyStoreAlgorithm) {
+		this.keyStoreAlgorithm = keyStoreAlgorithm;
+	}
+
+	protected String getTrustStoreAlgorithm() {
+		return this.trustStoreAlgorithm;
+	}
+
+	/**
+	 * Set the algorithm used when creating the trust store, default {@code SunX509}.
+	 * @param trustStoreAlgorithm the algorithm.
+	 * @since 2.1.6
+	 */
+	public void setTrustStoreAlgorithm(String trustStoreAlgorithm) {
+		this.trustStoreAlgorithm = trustStoreAlgorithm;
+	}
+
+	@Override
+	public void afterPropertiesSet() {
+		try {
+			super.afterPropertiesSet();
+		}
+		catch (Exception e) {
+			throw RabbitExceptionTranslator.convertRabbitAccessException(e);
+		}
+	}
+
 	@Override
 	public Class<?> getObjectType() {
 		return ConnectionFactory.class;
 	}
 
 	@Override
-	protected ConnectionFactory createInstance() throws Exception {
+	protected ConnectionFactory createInstance() {
 		if (this.useSSL) {
 			setUpSSL();
 		}
@@ -619,74 +683,98 @@ public class RabbitConnectionFactoryBean extends AbstractFactoryBean<ConnectionF
 
 	/**
 	 * Override this method to take complete control over the SSL setup.
-	 * @throws Exception an Exception.
 	 * @since 1.4.4
 	 */
-	protected void setUpSSL() throws Exception {
-		if (this.sslPropertiesLocation == null && this.keyStore == null && this.trustStore == null
-				&& this.keyStoreResource == null && this.trustStoreResource == null) {
-			if (this.skipServerCertificateValidation) {
-				if (this.sslAlgorithmSet) {
-					this.connectionFactory.useSslProtocol(this.sslAlgorithm);
-				}
-				else {
-					this.connectionFactory.useSslProtocol();
-				}
+	protected void setUpSSL() {
+		try {
+			if (this.sslPropertiesLocation == null && this.keyStore == null && this.trustStore == null // NOSONAR boolean complexity
+					&& this.keyStoreResource == null && this.trustStoreResource == null) {
+				setupBasicSSL();
 			}
 			else {
-				useDefaultTrustStoreMechanism();
+				if (this.sslPropertiesLocation != null) {
+					this.sslProperties.load(this.sslPropertiesLocation.getInputStream());
+				}
+				KeyManager[] keyManagers = configureKeyManagers();
+				TrustManager[] trustManagers = configureTrustManagers();
+
+				if (this.logger.isDebugEnabled()) {
+					this.logger.debug("Initializing SSLContext with KM: "
+							+ Arrays.toString(keyManagers)
+							+ ", TM: " + Arrays.toString(trustManagers)
+							+ ", random: " + this.secureRandom);
+				}
+				SSLContext context = createSSLContext();
+				context.init(keyManagers, trustManagers, this.secureRandom);
+				this.connectionFactory.useSslProtocol(context);
+				if (this.enableHostnameVerification) {
+					this.connectionFactory.enableHostnameVerification();
+				}
+			}
+		}
+		catch (Exception e) {
+			throw RabbitExceptionTranslator.convertRabbitAccessException(e);
+		}
+	}
+
+	private void setupBasicSSL() throws NoSuchAlgorithmException, KeyManagementException, KeyStoreException {
+		if (this.skipServerCertificateValidation) {
+			if (this.sslAlgorithmSet) {
+				this.connectionFactory.useSslProtocol(this.sslAlgorithm);
+			}
+			else {
+				this.connectionFactory.useSslProtocol();
 			}
 		}
 		else {
-			if (this.sslPropertiesLocation != null) {
-				this.sslProperties.load(this.sslPropertiesLocation.getInputStream());
-			}
-			PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
-			String keyStoreName = getKeyStore();
-			String trustStoreName = getTrustStore();
-			String keyStorePassword = getKeyStorePassphrase();
-			String trustStorePassword = getTrustStorePassphrase();
-			String keyStoreType = getKeyStoreType();
-			String trustStoreType = getTrustStoreType();
-			char[] keyPassphrase = null;
-			if (keyStorePassword != null) {
-				keyPassphrase = keyStorePassword.toCharArray();
-			}
-			char[] trustPassphrase = null;
-			if (trustStorePassword != null) {
-				trustPassphrase = trustStorePassword.toCharArray();
-			}
-			KeyManager[] keyManagers = null;
-			TrustManager[] trustManagers = null;
-			if (StringUtils.hasText(keyStoreName) || this.keyStoreResource != null) {
-				Resource keyStoreResource = this.keyStoreResource != null ? this.keyStoreResource
-						: resolver.getResource(keyStoreName);
-				KeyStore ks = KeyStore.getInstance(keyStoreType);
-				ks.load(keyStoreResource.getInputStream(), keyPassphrase);
-				KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
-				kmf.init(ks, keyPassphrase);
-				keyManagers = kmf.getKeyManagers();
-			}
-			if (StringUtils.hasText(trustStoreName) || this.trustStoreResource != null) {
-				Resource trustStoreResource = this.trustStoreResource != null ? this.trustStoreResource
-						: resolver.getResource(trustStoreName);
-				KeyStore tks = KeyStore.getInstance(trustStoreType);
-				tks.load(trustStoreResource.getInputStream(), trustPassphrase);
-				TrustManagerFactory tmf = TrustManagerFactory.getInstance("SunX509");
-				tmf.init(tks);
-				trustManagers = tmf.getTrustManagers();
-			}
-
-			if (this.logger.isDebugEnabled()) {
-				this.logger.debug("Initializing SSLContext with KM: "
-						+ Arrays.toString(keyManagers)
-						+ ", TM: " + Arrays.toString(trustManagers)
-						+ ", random: " + this.secureRandom);
-			}
-			SSLContext context = createSSLContext();
-			context.init(keyManagers, trustManagers, this.secureRandom);
-			this.connectionFactory.useSslProtocol(context);
+			useDefaultTrustStoreMechanism();
 		}
+	}
+
+	@Nullable
+	protected KeyManager[] configureKeyManagers() throws KeyStoreException, IOException, NoSuchAlgorithmException,
+			CertificateException, UnrecoverableKeyException {
+		String keyStoreName = getKeyStore();
+		String keyStorePassword = getKeyStorePassphrase();
+		String storeType = getKeyStoreType();
+		char[] keyPassphrase = null;
+		if (keyStorePassword != null) {
+			keyPassphrase = keyStorePassword.toCharArray();
+		}
+		KeyManager[] keyManagers = null;
+		if (StringUtils.hasText(keyStoreName) || this.keyStoreResource != null) {
+			Resource resource = this.keyStoreResource != null ? this.keyStoreResource
+					: this.resolver.getResource(keyStoreName);
+			KeyStore ks = KeyStore.getInstance(storeType);
+			ks.load(resource.getInputStream(), keyPassphrase);
+			KeyManagerFactory kmf = KeyManagerFactory.getInstance(this.keyStoreAlgorithm);
+			kmf.init(ks, keyPassphrase);
+			keyManagers = kmf.getKeyManagers();
+		}
+		return keyManagers;
+	}
+
+	@Nullable
+	protected TrustManager[] configureTrustManagers()
+			throws KeyStoreException, IOException, NoSuchAlgorithmException, CertificateException {
+		String trustStoreName = getTrustStore();
+		String trustStorePassword = getTrustStorePassphrase();
+		String storeType = getTrustStoreType();
+		char[] trustPassphrase = null;
+		if (trustStorePassword != null) {
+			trustPassphrase = trustStorePassword.toCharArray();
+		}
+		TrustManager[] trustManagers = null;
+		if (StringUtils.hasText(trustStoreName) || this.trustStoreResource != null) {
+			Resource resource = this.trustStoreResource != null ? this.trustStoreResource
+					: this.resolver.getResource(trustStoreName);
+			KeyStore tks = KeyStore.getInstance(storeType);
+			tks.load(resource.getInputStream(), trustPassphrase);
+			TrustManagerFactory tmf = TrustManagerFactory.getInstance(this.trustStoreAlgorithm);
+			tmf.init(tks);
+			trustManagers = tmf.getTrustManagers();
+		}
+		return trustManagers;
 	}
 
 	/**
@@ -709,6 +797,9 @@ public class RabbitConnectionFactoryBean extends AbstractFactoryBean<ConnectionF
 		trustManagerFactory.init((KeyStore) null);
 		sslContext.init(null, trustManagerFactory.getTrustManagers(), null);
 		this.connectionFactory.useSslProtocol(sslContext);
+		if (this.enableHostnameVerification) {
+			this.connectionFactory.enableHostnameVerification();
+		}
 	}
 
 }

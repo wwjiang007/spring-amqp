@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2017 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,16 +16,17 @@
 
 package org.springframework.amqp.rabbit.config;
 
-import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpoint;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
+import org.springframework.amqp.utils.JavaUtils;
 
 /**
- * A {@link RabbitListenerContainerFactory} implementation to build a regular
- * {@link SimpleMessageListenerContainer}.
+ * A {@link org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory}
+ * implementation to build a regular {@link SimpleMessageListenerContainer}.
  *
- * <p>This should be the default for most users and a good transition paths
- * for those that are used to build such container definition manually.
+ * <p>
+ * This should be the default for most users and a good transition paths for those that
+ * are used to build such container definition manually.
  *
  * @author Stephane Nicoll
  * @author Gary Russell
@@ -138,37 +139,24 @@ public class SimpleRabbitListenerContainerFactory
 	protected void initializeContainer(SimpleMessageListenerContainer instance, RabbitListenerEndpoint endpoint) {
 		super.initializeContainer(instance, endpoint);
 
-		if (this.txSize != null) {
-			instance.setTxSize(this.txSize);
+		JavaUtils javaUtils = JavaUtils.INSTANCE
+			.acceptIfNotNull(this.txSize, instance::setTxSize);
+		String concurrency = null;
+		if (endpoint != null) {
+			concurrency = endpoint.getConcurrency();
+			javaUtils.acceptIfNotNull(concurrency, instance::setConcurrency);
 		}
-		String concurrency = endpoint.getConcurrency();
-		if (concurrency != null) {
-			instance.setConcurrency(concurrency);
-		}
-		else if (this.concurrentConsumers != null) {
-			instance.setConcurrentConsumers(this.concurrentConsumers);
-		}
-		if ((concurrency == null || !(concurrency.contains("-"))) && this.maxConcurrentConsumers != null) {
-			instance.setMaxConcurrentConsumers(this.maxConcurrentConsumers);
-		}
-		if (this.startConsumerMinInterval != null) {
-			instance.setStartConsumerMinInterval(this.startConsumerMinInterval);
-		}
-		if (this.stopConsumerMinInterval != null) {
-			instance.setStopConsumerMinInterval(this.stopConsumerMinInterval);
-		}
-		if (this.consecutiveActiveTrigger != null) {
-			instance.setConsecutiveActiveTrigger(this.consecutiveActiveTrigger);
-		}
-		if (this.consecutiveIdleTrigger != null) {
-			instance.setConsecutiveIdleTrigger(this.consecutiveIdleTrigger);
-		}
-		if (this.receiveTimeout != null) {
-			instance.setReceiveTimeout(this.receiveTimeout);
-		}
-		if (this.deBatchingEnabled != null) {
-			instance.setDeBatchingEnabled(this.deBatchingEnabled);
-		}
+		javaUtils
+			.acceptIfCondition(concurrency == null && this.concurrentConsumers != null, this.concurrentConsumers,
+				instance::setConcurrentConsumers)
+			.acceptIfCondition((concurrency == null || !(concurrency.contains("-"))) && this.maxConcurrentConsumers != null,
+				this.maxConcurrentConsumers, instance::setMaxConcurrentConsumers)
+			.acceptIfNotNull(this.startConsumerMinInterval, instance::setStartConsumerMinInterval)
+			.acceptIfNotNull(this.stopConsumerMinInterval, instance::setStopConsumerMinInterval)
+			.acceptIfNotNull(this.consecutiveActiveTrigger, instance::setConsecutiveActiveTrigger)
+			.acceptIfNotNull(this.consecutiveIdleTrigger, instance::setConsecutiveIdleTrigger)
+			.acceptIfNotNull(this.receiveTimeout, instance::setReceiveTimeout)
+			.acceptIfNotNull(this.deBatchingEnabled, instance::setDeBatchingEnabled);
 	}
 
 }

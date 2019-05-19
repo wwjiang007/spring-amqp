@@ -1,11 +1,11 @@
 /*
- * Copyright 2016 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,12 @@
 
 package org.springframework.amqp.rabbit.listener;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 
 import org.springframework.amqp.event.AmqpEvent;
+import org.springframework.lang.Nullable;
 
 /**
  * An event that is emitted when a container is idle if the container
@@ -34,11 +36,12 @@ public class ListenerContainerIdleEvent extends AmqpEvent {
 
 	private final long idleTime;
 
+	@Nullable
 	private final String listenerId;
 
 	private final List<String> queueNames;
 
-	public ListenerContainerIdleEvent(Object source, long idleTime, String id, String... queueNames) {
+	public ListenerContainerIdleEvent(Object source, long idleTime, @Nullable String id, String... queueNames) {
 		super(source);
 		this.idleTime = idleTime;
 		this.listenerId = id;
@@ -65,6 +68,7 @@ public class ListenerContainerIdleEvent extends AmqpEvent {
 	 * The id of the listener (if {@code @RabbitListener}) or the container bean name.
 	 * @return the id.
 	 */
+	@Nullable
 	public String getListenerId() {
 		return this.listenerId;
 	}
@@ -72,7 +76,7 @@ public class ListenerContainerIdleEvent extends AmqpEvent {
 	@Override
 	public String toString() {
 		return "ListenerContainerIdleEvent [idleTime="
-				+ ((float) this.idleTime / 1000) + "s, listenerId=" + this.listenerId
+				+ Duration.ofMillis(this.idleTime) + ", listenerId=" + this.listenerId
 				+ ", container=" + getSource() + "]";
 	}
 

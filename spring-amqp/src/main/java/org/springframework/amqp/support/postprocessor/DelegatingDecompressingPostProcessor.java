@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2017 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,7 +22,6 @@ import java.util.Map;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessagePostProcessor;
-import org.springframework.amqp.core.MessageProperties;
 import org.springframework.core.Ordered;
 
 /**
@@ -69,7 +68,7 @@ public class DelegatingDecompressingPostProcessor implements MessagePostProcesso
 
 	/**
 	 * Remove the decompressor for this encoding; content will not be decompressed even if the
-	 * {@link MessageProperties#SPRING_AUTO_DECOMPRESS} header is true.
+	 * {@link org.springframework.amqp.core.MessageProperties#SPRING_AUTO_DECOMPRESS} header is true.
 	 * @param contentEncoding the content encoding.
 	 * @return the decompressor if it was present.
 	 */

@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2017 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -38,6 +38,7 @@ import org.springframework.context.ApplicationListener;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
@@ -66,7 +67,7 @@ import org.springframework.util.StringUtils;
 public class RabbitListenerEndpointRegistry implements DisposableBean, SmartLifecycle, ApplicationContextAware,
 		ApplicationListener<ContextRefreshedEvent> {
 
-	protected final Log logger = LogFactory.getLog(getClass());
+	protected final Log logger = LogFactory.getLog(getClass()); // NOSONAR protected
 
 	private final Map<String, MessageListenerContainer> listenerContainers =
 			new ConcurrentHashMap<String, MessageListenerContainer>();
@@ -141,7 +142,7 @@ public class RabbitListenerEndpointRegistry implements DisposableBean, SmartLife
 	 */
 	@SuppressWarnings("unchecked")
 	public void registerListenerContainer(RabbitListenerEndpoint endpoint, RabbitListenerContainerFactory<?> factory,
-	                                      boolean startImmediately) {
+				boolean startImmediately) {
 		Assert.notNull(endpoint, "Endpoint must not be null");
 		Assert.notNull(factory, "Factory must not be null");
 
@@ -162,6 +163,9 @@ public class RabbitListenerEndpointRegistry implements DisposableBean, SmartLife
 					this.applicationContext.getBeanFactory().registerSingleton(endpoint.getGroup(), containerGroup);
 				}
 				containerGroup.add(container);
+			}
+			if (this.contextRefreshed) {
+				container.lazyLoad();
 			}
 			if (startImmediately) {
 				startIfNecessary(container);
@@ -201,6 +205,16 @@ public class RabbitListenerEndpointRegistry implements DisposableBean, SmartLife
 		return listenerContainer;
 	}
 
+	/**
+	 * Remove a listener container from the registry.
+	 * @param id the container id.
+	 * @return the container, or null if there is no registration matching the id.
+	 * @since 2.0.6
+	 */
+	@Nullable
+	public MessageListenerContainer unregisterListenerContainer(String id) {
+		return this.listenerContainers.remove(id);
+	}
 
 	@Override
 	public void destroy() {
@@ -245,9 +259,9 @@ public class RabbitListenerEndpointRegistry implements DisposableBean, SmartLife
 
 	@Override
 	public void stop(Runnable callback) {
-		Collection<MessageListenerContainer> listenerContainers = getListenerContainers();
-		AggregatingCallback aggregatingCallback = new AggregatingCallback(listenerContainers.size(), callback);
-		for (MessageListenerContainer listenerContainer : listenerContainers) {
+		Collection<MessageListenerContainer> containers = getListenerContainers();
+		AggregatingCallback aggregatingCallback = new AggregatingCallback(containers.size(), callback);
+		for (MessageListenerContainer listenerContainer : containers) {
 			try {
 				listenerContainer.stop(aggregatingCallback);
 			}

@@ -1,11 +1,11 @@
 /*
- * Copyright 2010-2017 the original author or authors.
+ * Copyright 2010-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,14 +16,8 @@
 
 package org.springframework.amqp.rabbit.config;
 
-import static org.hamcrest.Matchers.contains;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -62,7 +56,7 @@ public class ListenerContainerParserTests {
 	private DefaultListableBeanFactory beanFactory;
 
 	@Before
-	public void setUp() throws Exception {
+	public void setUp() {
 		beanFactory = new DefaultListableBeanFactory();
 		XmlBeanDefinitionReader reader = new XmlBeanDefinitionReader(beanFactory);
 		reader.loadBeanDefinitions(new ClassPathResource(getClass().getSimpleName() + "-context.xml", getClass()));
@@ -70,129 +64,132 @@ public class ListenerContainerParserTests {
 	}
 
 	@Test
-	public void testParseWithQueueNames() throws Exception {
-		SimpleMessageListenerContainer container = beanFactory.getBean("container1", SimpleMessageListenerContainer.class);
-		assertEquals(AcknowledgeMode.MANUAL, container.getAcknowledgeMode());
-		assertEquals(beanFactory.getBean(ConnectionFactory.class), container.getConnectionFactory());
-		assertEquals(MessageListenerAdapter.class, container.getMessageListener().getClass());
+	public void testParseWithQueueNames() {
+		SimpleMessageListenerContainer container =
+				this.beanFactory.getBean("container1", SimpleMessageListenerContainer.class);
+		assertThat(container.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.MANUAL);
+		assertThat(container.getConnectionFactory()).isEqualTo(beanFactory.getBean(ConnectionFactory.class));
+		assertThat(container.getMessageListener().getClass()).isEqualTo(MessageListenerAdapter.class);
 		DirectFieldAccessor listenerAccessor = new DirectFieldAccessor(container.getMessageListener());
-		assertEquals(beanFactory.getBean(TestBean.class), listenerAccessor.getPropertyValue("delegate"));
-		assertEquals("handle", listenerAccessor.getPropertyValue("defaultListenerMethod"));
+		assertThat(listenerAccessor.getPropertyValue("delegate")).isEqualTo(beanFactory.getBean(TestBean.class));
+		assertThat(listenerAccessor.getPropertyValue("defaultListenerMethod")).isEqualTo("handle");
 		Queue queue = beanFactory.getBean("bar", Queue.class);
-		assertEquals("[foo, " + queue.getName() + "]", Arrays.asList(container.getQueueNames()).toString());
-		assertEquals(5, ReflectionTestUtils.getField(container, "concurrentConsumers"));
-		assertEquals(6, ReflectionTestUtils.getField(container, "maxConcurrentConsumers"));
-		assertEquals(1234L, ReflectionTestUtils.getField(container, "startConsumerMinInterval"));
-		assertEquals(2345L, ReflectionTestUtils.getField(container, "stopConsumerMinInterval"));
-		assertEquals(12, ReflectionTestUtils.getField(container, "consecutiveActiveTrigger"));
-		assertEquals(34, ReflectionTestUtils.getField(container, "consecutiveIdleTrigger"));
-		assertEquals(9876L, ReflectionTestUtils.getField(container, "receiveTimeout"));
+		assertThat(Arrays.asList(container.getQueueNames()).toString()).isEqualTo("[foo, " + queue.getName() + "]");
+		assertThat(ReflectionTestUtils.getField(container, "concurrentConsumers")).isEqualTo(5);
+		assertThat(ReflectionTestUtils.getField(container, "maxConcurrentConsumers")).isEqualTo(6);
+		assertThat(ReflectionTestUtils.getField(container, "startConsumerMinInterval")).isEqualTo(1234L);
+		assertThat(ReflectionTestUtils.getField(container, "stopConsumerMinInterval")).isEqualTo(2345L);
+		assertThat(ReflectionTestUtils.getField(container, "consecutiveActiveTrigger")).isEqualTo(12);
+		assertThat(ReflectionTestUtils.getField(container, "consecutiveIdleTrigger")).isEqualTo(34);
+		assertThat(ReflectionTestUtils.getField(container, "receiveTimeout")).isEqualTo(9876L);
 		Map<?, ?> consumerArgs = TestUtils.getPropertyValue(container, "consumerArgs", Map.class);
-		assertEquals(1, consumerArgs.size());
+		assertThat(consumerArgs).hasSize(1);
 		Object xPriority = consumerArgs.get("x-priority");
-		assertNotNull(xPriority);
-		assertEquals(10, xPriority);
-		assertEquals(Long.valueOf(5555), TestUtils.getPropertyValue(container, "recoveryBackOff.interval", Long.class));
-		assertFalse(TestUtils.getPropertyValue(container, "exclusive", Boolean.class));
-		assertFalse(TestUtils.getPropertyValue(container, "missingQueuesFatal", Boolean.class));
-		assertFalse(TestUtils.getPropertyValue(container, "possibleAuthenticationFailureFatal", Boolean.class));
-		assertTrue(TestUtils.getPropertyValue(container, "autoDeclare", Boolean.class));
-		assertEquals(5, TestUtils.getPropertyValue(container, "declarationRetries"));
-		assertEquals(1000L, TestUtils.getPropertyValue(container, "failedDeclarationRetryInterval"));
-		assertEquals(30000L, TestUtils.getPropertyValue(container, "retryDeclarationInterval"));
-		assertEquals(beanFactory.getBean("tagger"), TestUtils.getPropertyValue(container, "consumerTagStrategy"));
-		Collection<?> group = beanFactory.getBean("containerGroup", Collection.class);
-		assertEquals(4, group.size());
-		assertThat(group, contains(beanFactory.getBean("container1"), beanFactory.getBean("testListener1"),
-				beanFactory.getBean("testListener2"), beanFactory.getBean("direct1")));
-		assertEquals(1235L, ReflectionTestUtils.getField(container, "idleEventInterval"));
-		assertEquals("container1", container.getListenerId());
-		assertTrue(TestUtils.getPropertyValue(container, "mismatchedQueuesFatal", Boolean.class));
+		assertThat(xPriority).isNotNull();
+		assertThat(xPriority).isEqualTo(10);
+		assertThat(TestUtils.getPropertyValue(container, "recoveryBackOff.interval", Long.class)).isEqualTo(Long.valueOf(5555));
+		assertThat(TestUtils.getPropertyValue(container, "exclusive", Boolean.class)).isFalse();
+		assertThat(TestUtils.getPropertyValue(container, "missingQueuesFatal", Boolean.class)).isFalse();
+		assertThat(TestUtils.getPropertyValue(container, "possibleAuthenticationFailureFatal", Boolean.class)).isFalse();
+		assertThat(TestUtils.getPropertyValue(container, "autoDeclare", Boolean.class)).isTrue();
+		assertThat(TestUtils.getPropertyValue(container, "declarationRetries")).isEqualTo(5);
+		assertThat(TestUtils.getPropertyValue(container, "failedDeclarationRetryInterval")).isEqualTo(1000L);
+		assertThat(TestUtils.getPropertyValue(container, "retryDeclarationInterval")).isEqualTo(30000L);
+		assertThat(TestUtils.getPropertyValue(container, "consumerTagStrategy")).isEqualTo(beanFactory.getBean("tagger"));
+		@SuppressWarnings("unchecked")
+		Collection<Object> group = beanFactory.getBean("containerGroup", Collection.class);
+		assertThat(group).hasSize(4);
+		assertThat(group).containsExactly(beanFactory.getBean("container1"), beanFactory.getBean("testListener1"),
+				beanFactory.getBean("testListener2"), beanFactory.getBean("direct1"));
+		assertThat(ReflectionTestUtils.getField(container, "idleEventInterval")).isEqualTo(1235L);
+		assertThat(container.getListenerId()).isEqualTo("container1");
+		assertThat(TestUtils.getPropertyValue(container, "mismatchedQueuesFatal", Boolean.class)).isTrue();
 	}
 
 	@Test
-	public void testParseWithDirect() throws Exception {
+	public void testParseWithDirect() {
 		DirectMessageListenerContainer container = beanFactory.getBean("direct1", DirectMessageListenerContainer.class);
-		assertEquals(AcknowledgeMode.MANUAL, container.getAcknowledgeMode());
-		assertEquals(beanFactory.getBean(ConnectionFactory.class), container.getConnectionFactory());
-		assertEquals(MessageListenerAdapter.class, container.getMessageListener().getClass());
+		assertThat(container.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.MANUAL);
+		assertThat(container.getConnectionFactory()).isEqualTo(beanFactory.getBean(ConnectionFactory.class));
+		assertThat(container.getMessageListener().getClass()).isEqualTo(MessageListenerAdapter.class);
 		DirectFieldAccessor listenerAccessor = new DirectFieldAccessor(container.getMessageListener());
-		assertEquals(beanFactory.getBean(TestBean.class), listenerAccessor.getPropertyValue("delegate"));
-		assertEquals("handle", listenerAccessor.getPropertyValue("defaultListenerMethod"));
+		assertThat(listenerAccessor.getPropertyValue("delegate")).isEqualTo(beanFactory.getBean(TestBean.class));
+		assertThat(listenerAccessor.getPropertyValue("defaultListenerMethod")).isEqualTo("handle");
 		Queue queue = beanFactory.getBean("bar", Queue.class);
-		assertEquals("[foo, " + queue.getName() + "]", Arrays.asList(container.getQueueNames()).toString());
-		assertEquals(5, ReflectionTestUtils.getField(container, "consumersPerQueue"));
-		assertEquals(5000L, ReflectionTestUtils.getField(container, "monitorInterval"));
-		assertSame(this.beanFactory.getBean("sched"), ReflectionTestUtils.getField(container, "taskScheduler"));
-		assertSame(this.beanFactory.getBean("exec"), ReflectionTestUtils.getField(container, "taskExecutor"));
+		assertThat(Arrays.asList(container.getQueueNames()).toString()).isEqualTo("[foo, " + queue.getName() + "]");
+		assertThat(ReflectionTestUtils.getField(container, "consumersPerQueue")).isEqualTo(5);
+		assertThat(ReflectionTestUtils.getField(container, "monitorInterval")).isEqualTo(5000L);
+		assertThat(ReflectionTestUtils.getField(container, "taskScheduler")).isSameAs(this.beanFactory.getBean("sched"));
+		assertThat(ReflectionTestUtils.getField(container, "taskExecutor")).isSameAs(this.beanFactory.getBean("exec"));
 		Map<?, ?> consumerArgs = TestUtils.getPropertyValue(container, "consumerArgs", Map.class);
-		assertEquals(1, consumerArgs.size());
+		assertThat(consumerArgs).hasSize(1);
 		Object xPriority = consumerArgs.get("x-priority");
-		assertNotNull(xPriority);
-		assertEquals(10, xPriority);
-		assertEquals(Long.valueOf(5555), TestUtils.getPropertyValue(container, "recoveryBackOff.interval", Long.class));
-		assertFalse(TestUtils.getPropertyValue(container, "exclusive", Boolean.class));
-		assertFalse(TestUtils.getPropertyValue(container, "missingQueuesFatal", Boolean.class));
-		assertTrue(TestUtils.getPropertyValue(container, "autoDeclare", Boolean.class));
-		assertEquals(1000L, TestUtils.getPropertyValue(container, "failedDeclarationRetryInterval"));
-		assertEquals(beanFactory.getBean("tagger"), TestUtils.getPropertyValue(container, "consumerTagStrategy"));
-		Collection<?> group = beanFactory.getBean("containerGroup", Collection.class);
-		assertEquals(4, group.size());
-		assertThat(group, contains(beanFactory.getBean("container1"), beanFactory.getBean("testListener1"),
-				beanFactory.getBean("testListener2"), beanFactory.getBean("direct1")));
-		assertEquals(1235L, ReflectionTestUtils.getField(container, "idleEventInterval"));
-		assertEquals("direct1", container.getListenerId());
-		assertTrue(TestUtils.getPropertyValue(container, "mismatchedQueuesFatal", Boolean.class));
+		assertThat(xPriority).isNotNull();
+		assertThat(xPriority).isEqualTo(10);
+		assertThat(TestUtils.getPropertyValue(container, "recoveryBackOff.interval", Long.class)).isEqualTo(Long.valueOf(5555));
+		assertThat(TestUtils.getPropertyValue(container, "exclusive", Boolean.class)).isFalse();
+		assertThat(TestUtils.getPropertyValue(container, "missingQueuesFatal", Boolean.class)).isFalse();
+		assertThat(TestUtils.getPropertyValue(container, "autoDeclare", Boolean.class)).isTrue();
+		assertThat(TestUtils.getPropertyValue(container, "failedDeclarationRetryInterval")).isEqualTo(1000L);
+		assertThat(TestUtils.getPropertyValue(container, "consumerTagStrategy")).isEqualTo(beanFactory.getBean("tagger"));
+		@SuppressWarnings("unchecked")
+		Collection<Object> group = beanFactory.getBean("containerGroup", Collection.class);
+		assertThat(group).hasSize(4);
+		assertThat(group).containsExactly(beanFactory.getBean("container1"), beanFactory.getBean("testListener1"),
+				beanFactory.getBean("testListener2"), beanFactory.getBean("direct1"));
+		assertThat(ReflectionTestUtils.getField(container, "idleEventInterval")).isEqualTo(1235L);
+		assertThat(container.getListenerId()).isEqualTo("direct1");
+		assertThat(TestUtils.getPropertyValue(container, "mismatchedQueuesFatal", Boolean.class)).isTrue();
 	}
 
 	@Test
-	public void testParseWithQueues() throws Exception {
+	public void testParseWithQueues() {
 		SimpleMessageListenerContainer container = beanFactory.getBean("container2", SimpleMessageListenerContainer.class);
 		Queue queue = beanFactory.getBean("bar", Queue.class);
-		assertEquals("[foo, " + queue.getName() + "]", Arrays.asList(container.getQueueNames()).toString());
-		assertTrue(TestUtils.getPropertyValue(container, "missingQueuesFatal", Boolean.class));
-		assertFalse(TestUtils.getPropertyValue(container, "autoDeclare", Boolean.class));
+		assertThat(Arrays.asList(container.getQueueNames()).toString()).isEqualTo("[foo, " + queue.getName() + "]");
+		assertThat(TestUtils.getPropertyValue(container, "missingQueuesFatal", Boolean.class)).isTrue();
+		assertThat(TestUtils.getPropertyValue(container, "autoDeclare", Boolean.class)).isFalse();
 	}
 
 	@Test
-	public void testParseWithAdviceChain() throws Exception {
+	public void testParseWithAdviceChain() {
 		SimpleMessageListenerContainer container = beanFactory.getBean("container3", SimpleMessageListenerContainer.class);
 		Object adviceChain = ReflectionTestUtils.getField(container, "adviceChain");
-		assertNotNull(adviceChain);
-		assertEquals(3, ((Advice[]) adviceChain).length);
-		assertTrue(TestUtils.getPropertyValue(container, "exclusive", Boolean.class));
+		assertThat(adviceChain).isNotNull();
+		assertThat(((Advice[]) adviceChain).length).isEqualTo(3);
+		assertThat(TestUtils.getPropertyValue(container, "exclusive", Boolean.class)).isTrue();
 	}
 
 	@Test
-	public void testParseWithDefaults() throws Exception {
+	public void testParseWithDefaults() {
 		SimpleMessageListenerContainer container = beanFactory.getBean("container4", SimpleMessageListenerContainer.class);
-		assertEquals(1, ReflectionTestUtils.getField(container, "concurrentConsumers"));
-		assertEquals(true, ReflectionTestUtils.getField(container, "defaultRequeueRejected"));
+		assertThat(ReflectionTestUtils.getField(container, "concurrentConsumers")).isEqualTo(1);
+		assertThat(ReflectionTestUtils.getField(container, "defaultRequeueRejected")).isEqualTo(true);
 	}
 
 	@Test
-	public void testParseWithDefaultQueueRejectedFalse() throws Exception {
+	public void testParseWithDefaultQueueRejectedFalse() {
 		SimpleMessageListenerContainer container = beanFactory.getBean("container5", SimpleMessageListenerContainer.class);
-		assertEquals(1, ReflectionTestUtils.getField(container, "concurrentConsumers"));
-		assertEquals(false, ReflectionTestUtils.getField(container, "defaultRequeueRejected"));
-		assertFalse(container.isChannelTransacted());
+		assertThat(ReflectionTestUtils.getField(container, "concurrentConsumers")).isEqualTo(1);
+		assertThat(ReflectionTestUtils.getField(container, "defaultRequeueRejected")).isEqualTo(false);
+		assertThat(container.isChannelTransacted()).isFalse();
 	}
 
 	@Test
-	public void testParseWithTx() throws Exception {
+	public void testParseWithTx() {
 		SimpleMessageListenerContainer container = beanFactory.getBean("container6", SimpleMessageListenerContainer.class);
-		assertTrue(container.isChannelTransacted());
-		assertEquals(5, ReflectionTestUtils.getField(container, "txSize"));
+		assertThat(container.isChannelTransacted()).isTrue();
+		assertThat(ReflectionTestUtils.getField(container, "txSize")).isEqualTo(5);
 	}
 
 	@Test
-	public void testNamedListeners() throws Exception {
+	public void testNamedListeners() {
 		beanFactory.getBean("testListener1", SimpleMessageListenerContainer.class);
 		beanFactory.getBean("testListener2", SimpleMessageListenerContainer.class);
 	}
 
 	@Test
-	public void testAnonListeners() throws Exception {
+	public void testAnonListeners() {
 		beanFactory.getBean("org.springframework.amqp.rabbit.config.ListenerContainerFactoryBean#0",
 				SimpleMessageListenerContainer.class);
 		beanFactory.getBean("org.springframework.amqp.rabbit.config.ListenerContainerFactoryBean#1",
@@ -203,21 +200,21 @@ public class ListenerContainerParserTests {
 	}
 
 	@Test
-	public void testAnonEverything() throws Exception {
+	public void testAnonEverything() {
 		SimpleMessageListenerContainer container = beanFactory.getBean(
 				"org.springframework.amqp.rabbit.config.ListenerContainerFactoryBean#3",
 				SimpleMessageListenerContainer.class);
-		assertEquals("ex1", ReflectionTestUtils.getField(ReflectionTestUtils.getField(container, "messageListener"),
-				"responseExchange"));
+		assertThat(ReflectionTestUtils.getField(ReflectionTestUtils.getField(container, "messageListener"),
+				"responseExchange")).isEqualTo("ex1");
 		container = beanFactory.getBean(
 				"org.springframework.amqp.rabbit.config.ListenerContainerFactoryBean#4",
 				SimpleMessageListenerContainer.class);
-		assertEquals("ex2", ReflectionTestUtils.getField(ReflectionTestUtils.getField(container, "messageListener"),
-				"responseExchange"));
+		assertThat(ReflectionTestUtils.getField(ReflectionTestUtils.getField(container, "messageListener"),
+				"responseExchange")).isEqualTo("ex2");
 	}
 
 	@Test
-	public void testAnonParent() throws Exception {
+	public void testAnonParent() {
 		beanFactory.getBean("anonParentL1", SimpleMessageListenerContainer.class);
 		beanFactory.getBean("anonParentL2", SimpleMessageListenerContainer.class);
 	}
@@ -229,9 +226,23 @@ public class ListenerContainerParserTests {
 			fail("Parse exception expected");
 		}
 		catch (BeanDefinitionParsingException e) {
-			assertTrue(e.getMessage().startsWith(
-				"Configuration problem: Listener Container - cannot set channel-transacted with acknowledge='NONE'"));
+			assertThat(e.getMessage().startsWith(
+					"Configuration problem: Listener Container - cannot set channel-transacted with acknowledge='NONE'")).isTrue();
 		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testParseMessagePostProcessor() {
+		SimpleMessageListenerContainer listenerContainer =
+				this.beanFactory.getBean("testMessagePostProcessor", SimpleMessageListenerContainer.class);
+
+		Collection<Object> messagePostProcessors =
+				TestUtils.getPropertyValue(listenerContainer, "afterReceivePostProcessors", Collection.class);
+
+		assertThat(messagePostProcessors.isEmpty()).isFalse();
+		assertThat(messagePostProcessors).containsExactly(this.beanFactory.getBean("unzipPostProcessor"),
+				this.beanFactory.getBean("gUnzipPostProcessor"));
 	}
 
 	static class TestBean {
@@ -244,7 +255,7 @@ public class ListenerContainerParserTests {
 	static class TestAdvice implements MethodBeforeAdvice {
 
 		@Override
-		public void before(Method method, Object[] args, Object target) throws Throwable {
+		public void before(Method method, Object[] args, Object target) {
 		}
 
 	}

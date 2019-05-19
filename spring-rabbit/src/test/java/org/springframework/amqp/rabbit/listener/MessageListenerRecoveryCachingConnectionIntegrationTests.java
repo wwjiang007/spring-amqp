@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2018 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,11 +16,7 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNotSame;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Collections;
 import java.util.HashSet;
@@ -45,16 +41,17 @@ import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.Connection;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionProxy;
-import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.junit.BrokerRunning;
 import org.springframework.amqp.rabbit.junit.BrokerTestUtils;
 import org.springframework.amqp.rabbit.junit.LongRunningIntegrationTest;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.test.LogLevelAdjuster;
 import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.support.GenericApplicationContext;
 
 import com.rabbitmq.client.Channel;
@@ -133,15 +130,15 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		int timeout = getTimeout();
 		logger.debug("Waiting for messages with timeout = " + timeout + " (s)");
 		boolean waited = latch.await(timeout, TimeUnit.SECONDS);
-		assertTrue("Timed out waiting for message", waited);
+		assertThat(waited).as("Timed out waiting for message").isTrue();
 
 		// Give message time to reach broker (intermittent test failures)!
 		Thread.sleep(500L);
 		// All messages committed
 		byte[] bytes = (byte[]) template.receiveAndConvert(sendQueue.getName());
-		assertNotNull(bytes);
-		assertEquals("bar", new String(bytes));
-		assertEquals(null, template.receiveAndConvert(queue.getName()));
+		assertThat(bytes).isNotNull();
+		assertThat(new String(bytes)).isEqualTo("bar");
+		assertThat(template.receiveAndConvert(queue.getName())).isEqualTo(null);
 
 		this.container.stop();
 		((DisposableBean) connectionFactory).destroy();
@@ -166,15 +163,15 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		int timeout = getTimeout();
 		logger.debug("Waiting for messages with timeout = " + timeout + " (s)");
 		boolean waited = latch.await(timeout, TimeUnit.SECONDS);
-		assertTrue("Timed out waiting for message", waited);
+		assertThat(waited).as("Timed out waiting for message").isTrue();
 
 		container.stop();
 		Thread.sleep(200L);
 
 		// Foo message is redelivered
-		assertEquals("foo", template.receiveAndConvert(queue.getName()));
+		assertThat(template.receiveAndConvert(queue.getName())).isEqualTo("foo");
 		// Sending of bar message is also rolled back
-		assertNull(template.receiveAndConvert(sendQueue.getName()));
+		assertThat(template.receiveAndConvert(sendQueue.getName())).isNull();
 
 		((DisposableBean) connectionFactory).destroy();
 
@@ -198,9 +195,9 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		int timeout = getTimeout();
 		logger.debug("Waiting for messages with timeout = " + timeout + " (s)");
 		boolean waited = latch.await(timeout, TimeUnit.SECONDS);
-		assertTrue("Timed out waiting for message", waited);
+		assertThat(waited).as("Timed out waiting for message").isTrue();
 
-		assertNull(template.receiveAndConvert(queue.getName()));
+		assertThat(template.receiveAndConvert(queue.getName())).isNull();
 
 		this.container.stop();
 		((DisposableBean) connectionFactory1).destroy();
@@ -223,9 +220,9 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		int timeout = getTimeout();
 		logger.debug("Waiting for messages with timeout = " + timeout + " (s)");
 		boolean waited = latch.await(timeout, TimeUnit.SECONDS);
-		assertTrue("Timed out waiting for message", waited);
+		assertThat(waited).as("Timed out waiting for message").isTrue();
 
-		assertNull(template.receiveAndConvert(queue.getName()));
+		assertThat(template.receiveAndConvert(queue.getName())).isNull();
 
 		this.container.stop();
 		((DisposableBean) connectionFactory1).destroy();
@@ -245,7 +242,7 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		while (n++ < 100 && container.getActiveConsumerCount() != concurrentConsumers) {
 			Thread.sleep(50L);
 		}
-		assertEquals(concurrentConsumers, container.getActiveConsumerCount());
+		assertThat(container.getActiveConsumerCount()).isEqualTo(concurrentConsumers);
 
 		for (int i = 0; i < messageCount; i++) {
 			template.convertAndSend(queue.getName(), i + "foo");
@@ -254,13 +251,13 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		int timeout = getTimeout();
 		logger.debug("Waiting for messages with timeout = " + timeout + " (s)");
 		boolean waited = latch.await(timeout, TimeUnit.SECONDS);
-		assertTrue("Timed out waiting for message", waited);
+		assertThat(waited).as("Timed out waiting for message").isTrue();
 
-		assertNull(template.receiveAndConvert(queue.getName()));
+		assertThat(template.receiveAndConvert(queue.getName())).isNull();
 
-		assertEquals(concurrentConsumers, container.getActiveConsumerCount());
+		assertThat(container.getActiveConsumerCount()).isEqualTo(concurrentConsumers);
 		container.stop();
-		assertEquals(0, container.getActiveConsumerCount());
+		assertThat(container.getActiveConsumerCount()).isEqualTo(0);
 
 		((DisposableBean) connectionFactory1).destroy();
 		((DisposableBean) connectionFactory2).destroy();
@@ -287,9 +284,9 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		int timeout = Math.min(4 + messageCount / (4 * concurrentConsumers), 30);
 		logger.debug("Waiting for messages with timeout = " + timeout + " (s)");
 		boolean waited = latch.await(timeout, TimeUnit.SECONDS);
-		assertTrue("Timed out waiting for message", waited);
+		assertThat(waited).as("Timed out waiting for message").isTrue();
 
-		assertNull(template.receiveAndConvert(queue.getName()));
+		assertThat(template.receiveAndConvert(queue.getName())).isNull();
 
 		this.container.stop();
 		((DisposableBean) connectionFactory1).destroy();
@@ -316,9 +313,9 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		int timeout = getTimeout();
 		logger.debug("Waiting for messages with timeout = " + timeout + " (s)");
 		boolean waited = latch.await(timeout, TimeUnit.SECONDS);
-		assertTrue("Timed out waiting for message", waited);
+		assertThat(waited).as("Timed out waiting for message").isTrue();
 
-		assertNull(template.receiveAndConvert(queue.getName()));
+		assertThat(template.receiveAndConvert(queue.getName())).isNull();
 
 		this.container.stop();
 		((DisposableBean) connectionFactory).destroy();
@@ -395,12 +392,12 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
 		admin.deleteQueue("nonexistent");
 		try {
-			container = doCreateContainer("nonexistent", new VanillaListener(latch), connectionFactory);
 			Properties properties = new Properties();
 			properties.setProperty("mlc.missing.queues.fatal", "false");
 			GenericApplicationContext context = new GenericApplicationContext();
 			context.getBeanFactory().registerSingleton("spring.amqp.global.properties", properties);
 			context.refresh();
+			container = doCreateContainer("nonexistent", new VanillaListener(latch), connectionFactory, context);
 			container.setApplicationContext(context);
 			container.start();
 			testRecoverMissingQueues(latch, connectionFactory);
@@ -419,15 +416,15 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
 		// queue doesn't exist during startup - verify we started, create queue and verify recovery
 		Thread.sleep(1000);
-		assertEquals(messageCount, latch.getCount());
+		assertThat(latch.getCount()).isEqualTo(messageCount);
 		admin.declareQueue(new Queue("nonexistent"));
 		RabbitTemplate template = new RabbitTemplate(connectionFactory);
 		for (int i = 0; i < messageCount; i++) {
 			template.convertAndSend("nonexistent", "foo" + i);
 		}
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 		Set<?> consumers = TestUtils.getPropertyValue(container, "consumers", Set.class);
-		assertEquals(1, consumers.size());
+		assertThat(consumers).hasSize(1);
 		Object consumer = consumers.iterator().next();
 
 		// delete the queue and verify we recover again when it is recreated.
@@ -435,14 +432,14 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		Thread.sleep(1000);
 		latch = new CountDownLatch(messageCount);
 		container.setMessageListener(new MessageListenerAdapter(new VanillaListener(latch)));
-		assertEquals(messageCount, latch.getCount());
+		assertThat(latch.getCount()).isEqualTo(messageCount);
 		admin.declareQueue(new Queue("nonexistent"));
 		for (int i = 0; i < messageCount; i++) {
 			template.convertAndSend("nonexistent", "foo" + i);
 		}
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
-		assertEquals(1, consumers.size());
-		assertNotSame(consumer, consumers.iterator().next());
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(consumers).hasSize(1);
+		assertThat(consumers.iterator().next()).isNotSameAs(consumer);
 	}
 
 	private int getTimeout() {
@@ -458,6 +455,15 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 	protected SimpleMessageListenerContainer doCreateContainer(String queueName, Object listener,
 			ConnectionFactory connectionFactory) {
+
+		return doCreateContainer(queueName, listener, connectionFactory, null);
+	}
+
+
+
+	protected SimpleMessageListenerContainer doCreateContainer(String queueName, Object listener,
+			ConnectionFactory connectionFactory, ApplicationContext context) {
+
 		SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory);
 		container.setMessageListener(new MessageListenerAdapter(listener));
 		container.setQueueNames(queueName);
@@ -468,6 +474,9 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		container.setRecoveryInterval(100);
 		container.setFailedDeclarationRetryInterval(100);
 		container.setReceiveTimeout(50);
+		if (context != null) {
+			container.setApplicationContext(context);
+		}
 		container.afterPropertiesSet();
 		return container;
 	}
@@ -596,7 +605,7 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		}
 
 		@Override
-		public void onMessage(Message message, Channel channel) throws Exception {
+		public void onMessage(Message message, Channel channel) {
 			String value = new String(message.getBody());
 			logger.debug("Receiving: " + value);
 			latch.countDown();

@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -48,7 +48,7 @@ public class Address {
 	 */
 	public static final String AMQ_RABBITMQ_REPLY_TO = "amq.rabbitmq.reply-to";
 
-	private static final Pattern pattern = Pattern.compile("^(?:.*://)?([^/]*)/?(.*)$");
+	private static final Pattern ADDRESS_PATTERN = Pattern.compile("^(?:.*://)?([^/]*)/?(.*)$");
 
 	private final String exchangeName;
 
@@ -77,7 +77,7 @@ public class Address {
 			this.exchangeName = "";
 		}
 		else {
-			Matcher matcher = pattern.matcher(address);
+			Matcher matcher = ADDRESS_PATTERN.matcher(address);
 			boolean matchFound = matcher.find();
 			if (matchFound) {
 				this.exchangeName = matcher.group(1);
@@ -131,13 +131,14 @@ public class Address {
 	@Override
 	public int hashCode() {
 		int result = this.exchangeName != null ? this.exchangeName.hashCode() : 0;
-		result = 31 * result + (this.routingKey != null ? this.routingKey.hashCode() : 0);
+		int prime = 31; // NOSONAR magic #
+		result = prime * result + (this.routingKey != null ? this.routingKey.hashCode() : 0);
 		return result;
 	}
 
 	@Override
 	public String toString() {
-		StringBuilder sb = new StringBuilder(this.exchangeName + "/");
+		StringBuilder sb = new StringBuilder(this.exchangeName).append('/');
 		if (StringUtils.hasText(this.routingKey)) {
 			sb.append(this.routingKey);
 		}

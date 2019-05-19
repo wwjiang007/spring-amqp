@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,12 @@
 
 package org.springframework.amqp.core;
 
+import java.util.HashMap;
 import java.util.Map;
 
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 
 /**
  * Simple container collecting information to describe a queue. Used in conjunction with AmqpAdmin.
@@ -29,6 +32,12 @@ import org.springframework.util.Assert;
  */
 public class Queue extends AbstractDeclarable {
 
+	/**
+	 * Argument key for the master locator.
+	 * @since 2.1
+	 */
+	public static final String X_QUEUE_MASTER_LOCATOR = "x-queue-master-locator";
+
 	private final String name;
 
 	private final boolean durable;
@@ -37,7 +46,9 @@ public class Queue extends AbstractDeclarable {
 
 	private final boolean autoDelete;
 
-	private final java.util.Map<java.lang.String, java.lang.Object> arguments;
+	private final Map<String, Object> arguments;
+
+	private volatile String actualName;
 
 	/**
 	 * The queue is durable, non-exclusive and non auto-delete.
@@ -82,12 +93,19 @@ public class Queue extends AbstractDeclarable {
 	public Queue(String name, boolean durable, boolean exclusive, boolean autoDelete, Map<String, Object> arguments) {
 		Assert.notNull(name, "'name' cannot be null");
 		this.name = name;
+		this.actualName = StringUtils.hasText(name) ? name
+				: (Base64UrlNamingStrategy.DEFAULT.generateName() + "_awaiting_declaration");
 		this.durable = durable;
 		this.exclusive = exclusive;
 		this.autoDelete = autoDelete;
-		this.arguments = arguments;
+		this.arguments = arguments != null ? arguments : new HashMap<>();
 	}
 
+	/**
+	 * Return the name provided in the constructor.
+	 * @return the name.
+	 * @see #getActualName()
+	 */
 	public String getName() {
 		return this.name;
 	}
@@ -124,10 +142,44 @@ public class Queue extends AbstractDeclarable {
 		return this.arguments;
 	}
 
+	/**
+	 * Set the name from the DeclareOk.
+	 * @param name the name.
+	 * @since 2.1
+	 */
+	public void setActualName(String name) {
+		this.actualName = name;
+	}
+
+	/**
+	 * Return the name provided to the constructor or the broker-generated name
+	 * if that name is an empty String.
+	 * @return the name.
+	 * @since 2.1
+	 */
+	public String getActualName() {
+		return this.actualName;
+	}
+
+	/**
+	 * Set the master locator strategy argument for this queue.
+	 * @param locator the locator; null to clear the argument.
+	 * @since 2.1
+	 */
+	public final void setMasterLocator(@Nullable String locator) {
+		if (locator == null) {
+			this.arguments.remove(X_QUEUE_MASTER_LOCATOR);
+		}
+		else {
+			this.arguments.put(X_QUEUE_MASTER_LOCATOR, locator);
+		}
+	}
+
 	@Override
 	public String toString() {
 		return "Queue [name=" + this.name + ", durable=" + this.durable + ", autoDelete=" + this.autoDelete
-				+ ", exclusive=" + this.exclusive + ", arguments=" + this.arguments + "]";
+				+ ", exclusive=" + this.exclusive + ", arguments=" + this.arguments
+				+ ", actualName=" + this.actualName + "]";
 	}
 
 }

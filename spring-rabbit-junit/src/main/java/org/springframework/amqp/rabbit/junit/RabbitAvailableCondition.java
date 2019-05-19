@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 the original author or authors.
+ * Copyright 2017-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -45,10 +45,12 @@ import com.rabbitmq.client.ConnectionFactory;
  */
 public class RabbitAvailableCondition implements ExecutionCondition, AfterAllCallback, ParameterResolver {
 
+	private static final String BROKER_RUNNING_BEAN = "brokerRunning";
+
 	private static final ConditionEvaluationResult ENABLED = ConditionEvaluationResult.enabled(
 			"@RabbitAvailable is not present");
 
-	private static final ThreadLocal<BrokerRunning> brokerRunningHolder = new ThreadLocal<>();
+	private static final ThreadLocal<BrokerRunning> brokerRunningHolder = new ThreadLocal<>(); // NOSONAR - lower case
 
 	@Override
 	public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
@@ -57,7 +59,7 @@ public class RabbitAvailableCondition implements ExecutionCondition, AfterAllCal
 		if (rabbit != null) {
 			try {
 				String[] queues = rabbit.queues();
-				BrokerRunning brokerRunning = getStore(context).get("brokerRunning", BrokerRunning.class);
+				BrokerRunning brokerRunning = getStore(context).get(BROKER_RUNNING_BEAN, BrokerRunning.class);
 				if (brokerRunning == null) {
 					if (rabbit.management()) {
 						brokerRunning = BrokerRunning.isBrokerAndManagementRunningWithEmptyQueues(queues);
@@ -69,13 +71,13 @@ public class RabbitAvailableCondition implements ExecutionCondition, AfterAllCal
 				brokerRunning.isUp();
 				brokerRunningHolder.set(brokerRunning);
 				Store store = getStore(context);
-				store.put("brokerRunning", brokerRunning);
+				store.put(BROKER_RUNNING_BEAN, brokerRunning);
 				store.put("queuesToDelete", queues);
 				return ConditionEvaluationResult.enabled("RabbitMQ is available");
 			}
 			catch (Exception e) {
 				if (BrokerRunning.fatal()) {
-					throw new IllegalStateException("Required RabbitMQ is not available");
+					throw new IllegalStateException("Required RabbitMQ is not available", e);
 				}
 				return ConditionEvaluationResult.disabled("RabbitMQ is not available");
 			}
@@ -84,10 +86,10 @@ public class RabbitAvailableCondition implements ExecutionCondition, AfterAllCal
 	}
 
 	@Override
-	public void afterAll(ExtensionContext context) throws Exception {
+	public void afterAll(ExtensionContext context) {
 		brokerRunningHolder.remove();
 		Store store = getStore(context);
-		BrokerRunning brokerRunning = store.remove("brokerRunning", BrokerRunning.class);
+		BrokerRunning brokerRunning = store.remove(BROKER_RUNNING_BEAN, BrokerRunning.class);
 		if (brokerRunning != null) {
 			brokerRunning.removeTestQueues();
 		}
@@ -105,9 +107,9 @@ public class RabbitAvailableCondition implements ExecutionCondition, AfterAllCal
 			throws ParameterResolutionException {
 		// in parent for method injection, Composite key causes a store miss
 		BrokerRunning brokerRunning =
-				getParentStore(context).get("brokerRunning", BrokerRunning.class) == null
-					? getStore(context).get("brokerRunning", BrokerRunning.class)
-					: getParentStore(context).get("brokerRunning", BrokerRunning.class);
+				getParentStore(context).get(BROKER_RUNNING_BEAN, BrokerRunning.class) == null
+					? getStore(context).get(BROKER_RUNNING_BEAN, BrokerRunning.class)
+					: getParentStore(context).get(BROKER_RUNNING_BEAN, BrokerRunning.class);
 		Assert.state(brokerRunning != null, "Could not find brokerRunning instance");
 		Class<?> type = parameterContext.getParameter().getType();
 		return type.equals(ConnectionFactory.class) ? brokerRunning.getConnectionFactory()

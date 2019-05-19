@@ -1,11 +1,11 @@
 /*
- * Copyright 2016 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,7 @@
 
 package org.springframework.amqp.rabbit.annotation;
 
-import static org.hamcrest.Matchers.instanceOf;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.concurrent.TimeUnit;
 
@@ -161,12 +159,12 @@ public class ComplexTypeJsonIntegrationTests {
 	}
 
 	private void verifyFooBarBazQux(Foo<?> foo) {
-		assertNotNull(foo);
+		assertThat(foo).isNotNull();
 		Bar<?, ?> bar;
-		assertThat(foo.getField(), instanceOf(Bar.class));
+		assertThat(foo.getField()).isInstanceOf(Bar.class);
 		bar = (Bar<?, ?>) foo.getField();
-		assertThat(bar.getaField(), instanceOf(Baz.class));
-		assertThat(bar.getbField(), instanceOf(Qux.class));
+		assertThat(bar.getaField()).isInstanceOf(Baz.class);
+		assertThat(bar.getbField()).isInstanceOf(Qux.class);
 	}
 
 	@Configuration
@@ -182,7 +180,7 @@ public class ComplexTypeJsonIntegrationTests {
 		public RabbitTemplate template() {
 			RabbitTemplate rabbitTemplate = new RabbitTemplate(cf());
 			rabbitTemplate.setRoutingKey(TEST_QUEUE);
-			rabbitTemplate.setQueue(TEST_QUEUE2);
+			rabbitTemplate.setDefaultReceiveQueue(TEST_QUEUE2);
 			rabbitTemplate.setMessageConverter(jsonMessageConverter());
 			return rabbitTemplate;
 		}

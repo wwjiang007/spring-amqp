@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 the original author or authors.
+ * Copyright 2017-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,14 +16,11 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.hamcrest.Matchers.equalTo;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.AfterClass;
 import org.junit.ClassRule;
@@ -31,9 +28,12 @@ import org.junit.Test;
 
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.Connection;
+import org.springframework.amqp.rabbit.connection.RabbitUtils;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.junit.BrokerRunning;
 import org.springframework.amqp.utils.test.TestUtils;
+
+import com.rabbitmq.client.AMQP.BasicProperties;
 
 /**
  * @author Gary Russell
@@ -68,16 +68,14 @@ public class ContainerShutDownTests {
 		container.setShutdownTimeout(500);
 		container.setQueueNames("test.shutdown");
 		final CountDownLatch latch = new CountDownLatch(1);
-		final AtomicBoolean testEnded = new AtomicBoolean();
+		final CountDownLatch testEnded = new CountDownLatch(1);
 		container.setMessageListener(m -> {
-			while (!testEnded.get()) {
-				try {
-					latch.countDown();
-					Thread.sleep(100);
-				}
-				catch (InterruptedException e) {
-					// Thread.currentThread().interrupt(); // eat it
-				}
+			try {
+				latch.countDown();
+				testEnded.await(30, TimeUnit.SECONDS);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
 			}
 		});
 		final CountDownLatch startLatch = new CountDownLatch(1);
@@ -86,19 +84,28 @@ public class ContainerShutDownTests {
 				startLatch.countDown();
 			}
 		});
-		container.start();
-		assertTrue(startLatch.await(10, TimeUnit.SECONDS));
-		RabbitTemplate template = new RabbitTemplate(cf);
-		template.convertAndSend("test.shutdown", "foo");
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
 		Connection connection = cf.createConnection();
-		Map<?, ?> channels = TestUtils.getPropertyValue(connection, "target.delegate._channelManager._channelMap", Map.class);
-		assertThat(channels.size(), equalTo(2));
-		container.stop();
-		assertThat(channels.size(), equalTo(1));
+		Map<?, ?> channels = TestUtils.getPropertyValue(connection, "target.delegate._channelManager._channelMap",
+				Map.class);
+		container.start();
+		try {
+			assertThat(startLatch.await(30, TimeUnit.SECONDS)).isTrue();
+			RabbitTemplate template = new RabbitTemplate(cf);
+			template.execute(c -> {
+				c.basicPublish("", "test.shutdown", new BasicProperties(), "foo".getBytes());
+				RabbitUtils.setPhysicalCloseRequired(c, false);
+				return null;
+			});
+			assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
+			assertThat(channels).hasSize(2);
+		}
+		finally {
+			container.stop();
+			assertThat(channels).hasSize(1);
 
-		cf.destroy();
-		testEnded.set(true);
+			cf.destroy();
+			testEnded.countDown();
+		}
 	}
 
 }

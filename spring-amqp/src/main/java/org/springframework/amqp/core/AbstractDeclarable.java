@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -78,19 +78,19 @@ public abstract class AbstractDeclarable implements Declarable {
 	 * ({@code setAdminsThatShouldDeclare((AmqpAdmin) null)} or
 	 * {@code setAdminsThatShouldDeclare((AmqpAdmin[]) null)}). Clearing the collection resets
 	 * the behavior such that all admins will declare the object.
-	 * @param admins The admins.
+	 * @param adminArgs The admins.
 	 */
-	public void setAdminsThatShouldDeclare(Object... admins) {
-		Collection<Object> declaringAdmins = new ArrayList<Object>();
-		if (admins != null) {
-			if (admins.length > 1) {
-				Assert.noNullElements(admins, "'admins' cannot contain null elements");
+	public void setAdminsThatShouldDeclare(Object... adminArgs) {
+		Collection<Object> admins = new ArrayList<Object>();
+		if (adminArgs != null) {
+			if (adminArgs.length > 1) {
+				Assert.noNullElements(adminArgs, "'admins' cannot contain null elements");
 			}
-			if (admins.length > 0 && !(admins.length == 1 && admins[0] == null)) {
-				declaringAdmins.addAll(Arrays.asList(admins));
+			if (adminArgs.length > 0 && !(adminArgs.length == 1 && adminArgs[0] == null)) {
+				admins.addAll(Arrays.asList(adminArgs));
 			}
 		}
-		this.declaringAdmins = declaringAdmins;
+		this.declaringAdmins = admins;
 	}
 
 }

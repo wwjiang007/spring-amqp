@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-2017 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,7 @@
 
 package org.springframework.amqp.rabbit.test.mockito;
 
-import static org.junit.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
@@ -34,12 +34,12 @@ public class AnswerTests {
 	public void testLambda() {
 		Foo foo = spy(new Foo());
 		doAnswer(new LambdaAnswer<String>(true, (i, r) -> r + r)).when(foo).foo(anyString());
-		assertEquals("FOOFOO", foo.foo("foo"));
+		assertThat(foo.foo("foo")).isEqualTo("FOOFOO");
 		doAnswer(new LambdaAnswer<String>(true, (i, r) -> r + i.getArguments()[0])).when(foo).foo(anyString());
-		assertEquals("FOOfoo", foo.foo("foo"));
+		assertThat(foo.foo("foo")).isEqualTo("FOOfoo");
 		doAnswer(new LambdaAnswer<String>(false, (i, r) ->
 			"" + i.getArguments()[0] + i.getArguments()[0])).when(foo).foo(anyString());
-		assertEquals("foofoo", foo.foo("foo"));
+		assertThat(foo.foo("foo")).isEqualTo("foofoo");
 	}
 
 	private static class Foo {

@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,7 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -49,9 +47,8 @@ import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.rabbit.connection.AbstractConnectionFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.SingleConnectionFactory;
-import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.transaction.ListenerFailedRuleBasedTransactionAttribute;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.transaction.RabbitTransactionManager;
 import org.springframework.beans.DirectFieldAccessor;
 import org.springframework.transaction.TransactionDefinition;
@@ -144,12 +141,12 @@ public abstract class ExternalTxManagerTests {
 		container.setTransactionAttribute(transactionAttribute);
 		container.afterPropertiesSet();
 		container.start();
-		assertTrue(consumerLatch.await(10, TimeUnit.SECONDS));
+		assertThat(consumerLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(),
 				new byte[] { 0 });
 
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		Exception e = tooManyChannels.get();
 		if (e != null) {
@@ -157,7 +154,7 @@ public abstract class ExternalTxManagerTests {
 		}
 
 		verify(mockConnection, times(1)).createChannel();
-		assertTrue(commitLatch.get().await(10, TimeUnit.SECONDS));
+		assertThat(commitLatch.get().await(10, TimeUnit.SECONDS)).isTrue();
 		verify(onlyChannel).basicAck(anyLong(), anyBoolean());
 		verify(onlyChannel).txCommit();
 		verify(onlyChannel).basicPublish(anyString(), anyString(), anyBoolean(),
@@ -166,9 +163,9 @@ public abstract class ExternalTxManagerTests {
 		// verify close() was never called on the channel
 		DirectFieldAccessor dfa = new DirectFieldAccessor(cachingConnectionFactory);
 		List<?> channels = (List<?>) dfa.getPropertyValue("cachedChannelsTransactional");
-		assertEquals(0, channels.size());
+		assertThat(channels).hasSize(0);
 
-		assertTrue(transactionManager.committed);
+		assertThat(transactionManager.committed).isTrue();
 		transactionManager.committed = false;
 		transactionManager.latch = new CountDownLatch(1);
 		container.setMessageListener(m -> {
@@ -177,10 +174,10 @@ public abstract class ExternalTxManagerTests {
 		commitLatch.set(new CountDownLatch(1));
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(),
 				new byte[] { 0 });
-		assertTrue(transactionManager.latch.await(10, TimeUnit.SECONDS));
-		assertTrue(commitLatch.get().await(10, TimeUnit.SECONDS));
-		assertTrue(transactionManager.rolledBack);
-		assertTrue(rollbackLatch.get().await(10, TimeUnit.SECONDS));
+		assertThat(transactionManager.latch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(commitLatch.get().await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(transactionManager.rolledBack).isTrue();
+		assertThat(rollbackLatch.get().await(10, TimeUnit.SECONDS)).isTrue();
 		verify(onlyChannel).basicReject(anyLong(), anyBoolean());
 		verify(onlyChannel, times(1)).txRollback();
 
@@ -192,9 +189,9 @@ public abstract class ExternalTxManagerTests {
 		commitLatch.set(new CountDownLatch(1));
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(),
 				new byte[] { 0 });
-		assertTrue(transactionManager.latch.await(10, TimeUnit.SECONDS));
-		assertTrue(commitLatch.get().await(10, TimeUnit.SECONDS));
-		assertTrue(transactionManager.committed);
+		assertThat(transactionManager.latch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(commitLatch.get().await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(transactionManager.committed).isTrue();
 		verify(onlyChannel, times(2)).basicAck(anyLong(), anyBoolean());
 		verify(onlyChannel, times(3)).txCommit(); // previous + reject commit for above + this one
 
@@ -207,10 +204,10 @@ public abstract class ExternalTxManagerTests {
 		rollbackLatch.set(new CountDownLatch(1));
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(),
 				new byte[] { 0 });
-		assertTrue(transactionManager.latch.await(10, TimeUnit.SECONDS));
-		assertTrue(transactionManager.rolledBack);
-		assertTrue(rollbackLatch.get().await(10, TimeUnit.SECONDS));
-		assertTrue(commitLatch.get().await(10, TimeUnit.SECONDS));
+		assertThat(transactionManager.latch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(transactionManager.rolledBack).isTrue();
+		assertThat(rollbackLatch.get().await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(commitLatch.get().await(10, TimeUnit.SECONDS)).isTrue();
 		verify(onlyChannel, times(2)).basicReject(anyLong(), anyBoolean());
 		verify(onlyChannel, times(2)).txRollback();
 
@@ -223,9 +220,9 @@ public abstract class ExternalTxManagerTests {
 		commitLatch.set(new CountDownLatch(1));
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(),
 				new byte[] { 0 });
-		assertTrue(transactionManager.latch.await(10, TimeUnit.SECONDS));
-		assertTrue(commitLatch.get().await(10, TimeUnit.SECONDS));
-		assertTrue(transactionManager.committed);
+		assertThat(transactionManager.latch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(commitLatch.get().await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(transactionManager.committed).isTrue();
 		verify(onlyChannel, times(3)).basicAck(anyLong(), anyBoolean());
 		verify(onlyChannel, times(5)).txCommit();
 
@@ -315,12 +312,12 @@ public abstract class ExternalTxManagerTests {
 		container.setTransactionManager(new DummyTxManager());
 		container.afterPropertiesSet();
 		container.start();
-		assertTrue(consumerLatch.await(10, TimeUnit.SECONDS));
+		assertThat(consumerLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(),
 				new byte[] { 0 });
 
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		Exception e = tooManyChannels.get();
 		if (e != null) {
@@ -328,9 +325,9 @@ public abstract class ExternalTxManagerTests {
 		}
 
 		verify(mockConnection, times(1)).createChannel();
-		assertTrue(rejectLatch.await(10, TimeUnit.SECONDS));
+		assertThat(rejectLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
-		assertTrue(rollbackLatch.await(10, TimeUnit.SECONDS));
+		assertThat(rollbackLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		if (propagation != TransactionDefinition.PROPAGATION_NEVER) {
 			verify(channel).basicReject(anyLong(), eq(expectRequeue));
 		}
@@ -404,12 +401,12 @@ public abstract class ExternalTxManagerTests {
 		container.setTransactionManager(new DummyTxManager());
 		container.afterPropertiesSet();
 		container.start();
-		assertTrue(consumerLatch.await(10, TimeUnit.SECONDS));
+		assertThat(consumerLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(),
 				new byte[] { 0 });
 
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		Exception e = tooManyChannels.get();
 		if (e != null) {
@@ -418,8 +415,8 @@ public abstract class ExternalTxManagerTests {
 
 		verify(mockConnection, times(1)).createChannel();
 
-		assertTrue(ackLatch.await(10, TimeUnit.SECONDS));
-		assertTrue(commitLatch.await(10, TimeUnit.SECONDS));
+		assertThat(ackLatch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(commitLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		verify(channel).basicAck(anyLong(), anyBoolean());
 		container.stop();
 	}
@@ -494,11 +491,11 @@ public abstract class ExternalTxManagerTests {
 		container.setTransactionManager(new DummyTxManager());
 		container.afterPropertiesSet();
 		container.start();
-		assertTrue(consumerLatch.await(10, TimeUnit.SECONDS));
+		assertThat(consumerLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(), new byte[] {0});
 
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		Exception e = tooManyChannels.get();
 		if (e != null) {
@@ -507,7 +504,7 @@ public abstract class ExternalTxManagerTests {
 
 		verify(listenerConnection, Mockito.times(1)).createChannel();
 		verify(templateConnection, Mockito.times(1)).createChannel();
-		assertTrue(commitLatch.await(10, TimeUnit.SECONDS));
+		assertThat(commitLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		verify(listenerChannel).txCommit();
 		verify(templateChannel).basicPublish(Mockito.anyString(), Mockito.anyString(), Mockito.anyBoolean(),
 				Mockito.any(BasicProperties.class), Mockito.any(byte[].class));
@@ -516,7 +513,7 @@ public abstract class ExternalTxManagerTests {
 		// verify close() was never called on the channel
 		DirectFieldAccessor dfa = new DirectFieldAccessor(cachingConnectionFactory);
 		List<?> channels = (List<?>) dfa.getPropertyValue("cachedChannelsTransactional");
-		assertEquals(0, channels.size());
+		assertThat(channels).hasSize(0);
 
 		container.stop();
 
@@ -576,11 +573,11 @@ public abstract class ExternalTxManagerTests {
 		container.setTransactionManager(new DummyTxManager());
 		container.afterPropertiesSet();
 		container.start();
-		assertTrue(consumerLatch.await(10, TimeUnit.SECONDS));
+		assertThat(consumerLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(), new byte[] {0});
 
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		Exception e = tooManyChannels.get();
 		if (e != null) {
@@ -588,7 +585,7 @@ public abstract class ExternalTxManagerTests {
 		}
 
 		verify(mockConnection, Mockito.times(1)).createChannel();
-		assertTrue(commitLatch.await(10, TimeUnit.SECONDS));
+		assertThat(commitLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		verify(onlyChannel).txCommit();
 		verify(onlyChannel).basicPublish(Mockito.anyString(), Mockito.anyString(), Mockito.anyBoolean(),
 				Mockito.any(BasicProperties.class), Mockito.any(byte[].class));
@@ -598,7 +595,7 @@ public abstract class ExternalTxManagerTests {
 
 		container.stop();
 
-		assertSame(onlyChannel, exposed.get());
+		assertThat(exposed.get()).isSameAs(onlyChannel);
 	}
 
 	/**
@@ -657,11 +654,11 @@ public abstract class ExternalTxManagerTests {
 		container.setTransactionManager(new DummyTxManager());
 		container.afterPropertiesSet();
 		container.start();
-		assertTrue(consumerLatch.await(10, TimeUnit.SECONDS));
+		assertThat(consumerLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(), new byte[] {0});
 
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		Exception e = tooManyChannels.get();
 		if (e != null) {
@@ -669,7 +666,7 @@ public abstract class ExternalTxManagerTests {
 		}
 
 		verify(mockConnection, Mockito.times(1)).createChannel();
-		assertTrue(commitLatch.await(10, TimeUnit.SECONDS));
+		assertThat(commitLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		verify(onlyChannel).txCommit();
 		verify(onlyChannel).basicPublish(Mockito.anyString(), Mockito.anyString(), Mockito.anyBoolean(),
 				Mockito.any(BasicProperties.class), Mockito.any(byte[].class));
@@ -679,7 +676,7 @@ public abstract class ExternalTxManagerTests {
 
 		container.stop();
 
-		assertSame(onlyChannel, exposed.get());
+		assertThat(exposed.get()).isSameAs(onlyChannel);
 	}
 
 	/**
@@ -736,11 +733,11 @@ public abstract class ExternalTxManagerTests {
 		container.setTransactionManager(new RabbitTransactionManager(cachingConnectionFactory));
 		container.afterPropertiesSet();
 		container.start();
-		assertTrue(consumerLatch.await(10, TimeUnit.SECONDS));
+		assertThat(consumerLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		consumer.get().handleDelivery("qux", new Envelope(1, false, "foo", "bar"), new BasicProperties(), new byte[] {0});
 
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		Exception e = tooManyChannels.get();
 		if (e != null) {
@@ -748,7 +745,7 @@ public abstract class ExternalTxManagerTests {
 		}
 
 		verify(mockConnection, Mockito.times(1)).createChannel();
-		assertTrue(commitLatch.await(10, TimeUnit.SECONDS));
+		assertThat(commitLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		verify(onlyChannel).txCommit();
 		verify(onlyChannel).basicPublish(Mockito.anyString(), Mockito.anyString(), Mockito.anyBoolean(),
 				Mockito.any(BasicProperties.class), Mockito.any(byte[].class));
@@ -756,7 +753,7 @@ public abstract class ExternalTxManagerTests {
 		// verify close() was never called on the channel
 		DirectFieldAccessor dfa = new DirectFieldAccessor(cachingConnectionFactory);
 		List<?> channels = (List<?>) dfa.getPropertyValue("cachedChannelsTransactional");
-		assertEquals(0, channels.size());
+		assertThat(channels).hasSize(0);
 
 		container.stop();
 	}

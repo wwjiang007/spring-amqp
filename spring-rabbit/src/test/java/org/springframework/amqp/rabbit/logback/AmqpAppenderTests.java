@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-2017 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,7 @@
 
 package org.springframework.amqp.rabbit.logback;
 
-import static org.junit.Assert.assertFalse;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -37,6 +37,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 /**
  *
  * @author Stephen Oakey
+ * @author Artem Bilan
  *
  * @since 2.0
  */
@@ -99,6 +100,7 @@ public class AmqpAppenderTests {
 	public void testSslConfigurationWithAlgorithm() {
 		AmqpAppender appender = new AmqpAppender();
 		appender.setUseSsl(true);
+		appender.setVerifyHostname(false);
 		String sslAlgorithm = "TLSv2";
 		appender.setSslAlgorithm(sslAlgorithm);
 
@@ -106,8 +108,9 @@ public class AmqpAppenderTests {
 		appender.configureRabbitConnectionFactory(bean);
 
 		verifyDefaultHostProperties(bean);
-		verify(bean).setUseSSL(eq(true));
-		verify(bean).setSslAlgorithm(eq(sslAlgorithm));
+		verify(bean).setUseSSL(true);
+		verify(bean).setSslAlgorithm(sslAlgorithm);
+		verify(bean).setEnableHostnameVerification(false);
 	}
 
 	@Test
@@ -186,7 +189,7 @@ public class AmqpAppenderTests {
 		appender.setKeyStore("foo");
 		appender.start();
 
-		assertFalse((boolean) ReflectionTestUtils.getField(appender, "started"));
+		assertThat((boolean) ReflectionTestUtils.getField(appender, "started")).isFalse();
 	}
 
 	private void verifyDefaultHostProperties(RabbitConnectionFactoryBean bean) {

@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,8 +16,8 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 import java.util.Set;
 
@@ -44,11 +44,22 @@ import com.rabbitmq.client.ConnectionFactory;
  * @since 1.2.1
  *
  */
-@RabbitAvailable(queues = SimpleMessageListenerContainerLongTests.QUEUE)
+@RabbitAvailable(queues = {
+		SimpleMessageListenerContainerLongTests.QUEUE,
+		SimpleMessageListenerContainerLongTests.QUEUE2,
+		SimpleMessageListenerContainerLongTests.QUEUE3,
+		SimpleMessageListenerContainerLongTests.QUEUE4
+})
 @LongRunning
 public class SimpleMessageListenerContainerLongTests {
 
 	public static final String QUEUE = "SimpleMessageListenerContainerLongTests.queue";
+
+	public static final String QUEUE2 = "SimpleMessageListenerContainerLongTests.queue2";
+
+	public static final String QUEUE3 = "SimpleMessageListenerContainerLongTests.queue3";
+
+	public static final String QUEUE4 = "SimpleMessageListenerContainerLongTests.queue4";
 
 	private final Log logger = LogFactory.getLog(SimpleMessageListenerContainerLongTests.class);
 
@@ -79,7 +90,7 @@ public class SimpleMessageListenerContainerLongTests {
 			container.setConcurrentConsumers(2);
 			container.setChannelTransacted(transacted);
 			container.afterPropertiesSet();
-			assertEquals(2, ReflectionTestUtils.getField(container, "concurrentConsumers"));
+			assertThat(ReflectionTestUtils.getField(container, "concurrentConsumers")).isEqualTo(2);
 			container.start();
 			waitForNConsumers(container, 2);
 			container.setConcurrentConsumers(1);
@@ -124,7 +135,7 @@ public class SimpleMessageListenerContainerLongTests {
 		while (n++ < 100 && container.getActiveConsumerCount() != 2) {
 			Thread.sleep(100);
 		}
-		assertEquals(2, container.getActiveConsumerCount());
+		assertThat(container.getActiveConsumerCount()).isEqualTo(2);
 		container.stop();
 		for (int i = 0; i < 20; i++) {
 			admin.deleteQueue("testAddQueuesAndStartInCycle" + i);
@@ -132,6 +143,90 @@ public class SimpleMessageListenerContainerLongTests {
 		connectionFactory.destroy();
 	}
 
+	@Test
+	public void testIncreaseMinAtMax() throws Exception {
+		SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(this.connectionFactory);
+		container.setStartConsumerMinInterval(100);
+		container.setConsecutiveActiveTrigger(1);
+		container.setMessageListener(m -> {
+			try {
+				Thread.sleep(50);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+		container.setQueueNames(QUEUE2);
+		container.setConcurrentConsumers(2);
+		container.setMaxConcurrentConsumers(5);
+		container.afterPropertiesSet();
+		container.start();
+		RabbitTemplate template = new RabbitTemplate(this.connectionFactory);
+		for (int i = 0; i < 20; i++) {
+			template.convertAndSend(QUEUE2, "foo");
+		}
+		waitForNConsumers(container, 5);
+		container.setConcurrentConsumers(4);
+		Set<?> consumers = (Set<?>) TestUtils.getPropertyValue(container, "consumers");
+		assertThat(consumers).hasSize(5);
+	}
+
+	@Test
+	public void testDecreaseMinAtMax() throws Exception {
+		SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(this.connectionFactory);
+		container.setStartConsumerMinInterval(100);
+		container.setConsecutiveActiveTrigger(1);
+		container.setMessageListener(m -> {
+			try {
+				Thread.sleep(50);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+		container.setQueueNames(QUEUE3);
+		container.setConcurrentConsumers(2);
+		container.setMaxConcurrentConsumers(3);
+		container.afterPropertiesSet();
+		container.start();
+		RabbitTemplate template = new RabbitTemplate(this.connectionFactory);
+		for (int i = 0; i < 20; i++) {
+			template.convertAndSend(QUEUE3, "foo");
+		}
+		waitForNConsumers(container, 3);
+		container.setConcurrentConsumers(1);
+		Set<?> consumers = (Set<?>) TestUtils.getPropertyValue(container, "consumers");
+		assertThat(consumers).hasSize(3);
+	}
+
+	@Test
+	public void testDecreaseMaxAtMax() throws Exception {
+		SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(this.connectionFactory);
+		container.setStartConsumerMinInterval(100);
+		container.setConsecutiveActiveTrigger(1);
+		container.setMessageListener(m -> {
+			try {
+				Thread.sleep(50);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+		container.setQueueNames(QUEUE4);
+		container.setConcurrentConsumers(2);
+		container.setMaxConcurrentConsumers(3);
+		container.afterPropertiesSet();
+		container.start();
+		RabbitTemplate template = new RabbitTemplate(this.connectionFactory);
+		for (int i = 0; i < 20; i++) {
+			template.convertAndSend(QUEUE4, "foo");
+		}
+		waitForNConsumers(container, 3);
+		container.setConcurrentConsumers(1);
+		container.setMaxConcurrentConsumers(1);
+		Set<?> consumers = (Set<?>) TestUtils.getPropertyValue(container, "consumers");
+		assertThat(consumers).hasSize(1);
+	}
 
 	public void handleMessage(String foo) {
 		logger.info(foo);

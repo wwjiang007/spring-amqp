@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,8 +16,8 @@
 
 package org.springframework.amqp.rabbit.config;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -85,11 +85,11 @@ public final class AdminParserTests {
 		else {
 			admin = beanFactory.getBean(RabbitAdmin.class);
 		}
-		assertEquals(expectedAutoStartup, admin.isAutoStartup());
-		assertEquals(beanFactory.getBean(ConnectionFactory.class), admin.getRabbitTemplate().getConnectionFactory());
+		assertThat(admin.isAutoStartup()).isEqualTo(expectedAutoStartup);
+		assertThat(admin.getRabbitTemplate().getConnectionFactory()).isEqualTo(beanFactory.getBean(ConnectionFactory.class));
 
 		if (initialisedWithTemplate) {
-			assertEquals(beanFactory.getBean(RabbitTemplate.class), admin.getRabbitTemplate());
+			assertThat(admin.getRabbitTemplate()).isEqualTo(beanFactory.getBean(RabbitTemplate.class));
 		}
 
 	}

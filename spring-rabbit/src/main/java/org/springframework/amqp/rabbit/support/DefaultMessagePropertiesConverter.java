@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,6 @@
 
 package org.springframework.amqp.rabbit.support;
 
-import java.io.DataInputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -27,6 +26,7 @@ import java.util.Map;
 
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.MessageProperties;
+import org.springframework.lang.Nullable;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
@@ -74,7 +74,7 @@ public class DefaultMessagePropertiesConverter implements MessagePropertiesConve
 	 * Use this constructor with 'true' to restore pre-1.6 behavior.
 	 * @param longStringLimit the limit.
 	 * @param convertLongLongStrings {@link LongString} when false,
-	 * {@link DataInputStream} when true.
+	 * {@link java.io.DataInputStream} when true.
 	 * @since 1.6
 	 */
 	public DefaultMessagePropertiesConverter(int longStringLimit, boolean convertLongLongStrings) {
@@ -177,11 +177,14 @@ public class DefaultMessagePropertiesConverter implements MessagePropertiesConve
 	 * Converts a header value to a String if the value type is unsupported by AMQP, also handling values
 	 * nested inside Lists or Maps.
 	 * <p> {@code null} values are passed through, although Rabbit client will throw an IllegalArgumentException.
-	 * @param value the value.
+	 * @param valueArg the value.
 	 * @return the converted value.
 	 */
-	private Object convertHeaderValueIfNecessary(Object value) {
-		boolean valid = (value instanceof String) || (value instanceof byte[]) || (value instanceof Boolean)
+	@Nullable // NOSONAR complexity
+	private Object convertHeaderValueIfNecessary(@Nullable Object valueArg) {
+		Object value = valueArg;
+		boolean valid = (value instanceof String) || (value instanceof byte[]) // NOSONAR boolean complexity
+				|| (value instanceof Boolean)
 				|| (value instanceof LongString) || (value instanceof Integer) || (value instanceof Long)
 				|| (value instanceof Float) || (value instanceof Double) || (value instanceof BigDecimal)
 				|| (value instanceof Short) || (value instanceof Byte) || (value instanceof Date)
@@ -242,11 +245,12 @@ public class DefaultMessagePropertiesConverter implements MessagePropertiesConve
 	/**
 	 * Converts a LongString value using {@link #convertLongString(LongString, String)}, also handling values
 	 * nested in Lists or Maps.
-	 * @param value the value.
+	 * @param valueArg the value.
 	 * @param charset the charset.
 	 * @return the converted string.
 	 */
-	private Object convertLongStringIfNecessary(Object value, String charset) {
+	private Object convertLongStringIfNecessary(Object valueArg, String charset) {
+		Object value = valueArg;
 		if (value instanceof LongString) {
 			value = convertLongString((LongString) value, charset);
 		}

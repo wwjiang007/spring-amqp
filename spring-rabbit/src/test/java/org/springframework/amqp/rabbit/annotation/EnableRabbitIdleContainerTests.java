@@ -1,11 +1,11 @@
 /*
- * Copyright 2016 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,7 @@
 
 package org.springframework.amqp.rabbit.annotation;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -45,6 +43,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
@@ -76,16 +75,16 @@ public class EnableRabbitIdleContainerTests {
 
 	@Test
 	public void testIdle() throws Exception {
-		assertEquals("FOO", this.rabbitTemplate.convertSendAndReceive(this.queue.getName(), "foo"));
-		assertEquals("FOO", this.rabbitTemplate.convertSendAndReceive(this.queue.getName(), "foo"));
-		assertTrue(this.listener.latch.await(10, TimeUnit.SECONDS));
-		assertEquals("foo", this.listener.event.getListenerId());
-		assertEquals(this.queue.getName(), this.listener.event.getQueueNames()[0]);
-		assertEquals("BAR", this.rabbitTemplate.convertSendAndReceive(this.queue.getName(), "bar"));
-		assertEquals("BAR", this.rabbitTemplate.convertSendAndReceive(this.queue.getName(), "bar"));
-		assertFalse(this.listener.barEventReceived);
+		assertThat(this.rabbitTemplate.convertSendAndReceive(this.queue.getName(), "foo")).isEqualTo("FOO");
+		assertThat(this.rabbitTemplate.convertSendAndReceive(this.queue.getName(), "foo")).isEqualTo("FOO");
+		assertThat(this.listener.latch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(this.listener.event.getListenerId()).isEqualTo("foo");
+		assertThat(this.listener.event.getQueueNames()[0]).isEqualTo(this.queue.getName());
+		assertThat(this.rabbitTemplate.convertSendAndReceive(this.queue.getName(), "bar")).isEqualTo("BAR");
+		assertThat(this.rabbitTemplate.convertSendAndReceive(this.queue.getName(), "bar")).isEqualTo("BAR");
+		assertThat(this.listener.barEventReceived).isFalse();
 		MessageListenerContainer listenerContainer = registry.getListenerContainer("foo");
-		assertTrue(TestUtils.getPropertyValue(listenerContainer, "mismatchedQueuesFatal", Boolean.class));
+		assertThat(TestUtils.getPropertyValue(listenerContainer, "mismatchedQueuesFatal", Boolean.class)).isTrue();
 	}
 
 	@Configuration
@@ -131,6 +130,7 @@ public class EnableRabbitIdleContainerTests {
 
 	}
 
+	@Component
 	public static class Listener {
 
 		private final Log logger = LogFactory.getLog(this.getClass());

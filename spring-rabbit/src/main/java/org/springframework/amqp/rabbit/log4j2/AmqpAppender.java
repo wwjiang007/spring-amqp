@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-2017 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,6 +20,7 @@ import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Calendar;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -62,16 +63,18 @@ import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.connection.AbstractConnectionFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactoryConfigurationUtils;
 import org.springframework.amqp.rabbit.connection.RabbitConnectionFactoryBean;
 import org.springframework.amqp.rabbit.core.DeclareExchangeConnectionListener;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.support.LogAppenderUtils;
+import org.springframework.amqp.utils.JavaUtils;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.retry.RetryPolicy;
 import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.retry.support.RetryTemplate;
+import org.springframework.util.StringUtils;
 
 import com.rabbitmq.client.ConnectionFactory;
 
@@ -129,15 +132,17 @@ public class AmqpAppender extends AbstractAppender {
 	 */
 	private final Object layoutMutex = new Object();
 
+	@SuppressWarnings("deprecation") // For backward compatibility
 	public AmqpAppender(String name, Filter filter, Layout<? extends Serializable> layout, boolean ignoreExceptions,
 			AmqpManager manager, BlockingQueue<Event> eventQueue) {
+
 		super(name, filter, layout, ignoreExceptions);
 		this.manager = manager;
 		this.events = eventQueue;
 	}
 
 	@PluginFactory
-	public static AmqpAppender createAppender(
+	public static AmqpAppender createAppender(// NOSONAR NCSS line count
 			@PluginConfiguration final Configuration configuration,
 			@PluginAttribute("name") String name,
 			@PluginElement("Layout") Layout<? extends Serializable> layout,
@@ -151,6 +156,7 @@ public class AmqpAppender extends AbstractAppender {
 			@PluginAttribute("password") String password,
 			@PluginAttribute("virtualHost") String virtualHost,
 			@PluginAttribute("useSsl") boolean useSsl,
+			@PluginAttribute("verifyHostname") boolean verifyHostname,
 			@PluginAttribute("sslAlgorithm") String sslAlgorithm,
 			@PluginAttribute("sslPropertiesLocation") String sslPropertiesLocation,
 			@PluginAttribute("keyStore") String keyStore,
@@ -172,6 +178,7 @@ public class AmqpAppender extends AbstractAppender {
 			@PluginAttribute("autoDelete") boolean autoDelete,
 			@PluginAttribute("contentType") String contentType,
 			@PluginAttribute("contentEncoding") String contentEncoding,
+			@PluginAttribute("connectionName") String connectionName,
 			@PluginAttribute("clientConnectionProperties") String clientConnectionProperties,
 			@PluginAttribute("async") boolean async,
 			@PluginAttribute("charset") String charset,
@@ -193,6 +200,7 @@ public class AmqpAppender extends AbstractAppender {
 		manager.password = password;
 		manager.virtualHost = virtualHost;
 		manager.useSsl = useSsl;
+		manager.verifyHostname = verifyHostname;
 		manager.sslAlgorithm = sslAlgorithm;
 		manager.sslPropertiesLocation = sslPropertiesLocation;
 		manager.keyStore = keyStore;
@@ -214,6 +222,7 @@ public class AmqpAppender extends AbstractAppender {
 		manager.autoDelete = autoDelete;
 		manager.contentType = contentType;
 		manager.contentEncoding = contentEncoding;
+		manager.connectionName = connectionName;
 		manager.clientConnectionProperties = clientConnectionProperties;
 		manager.charset = charset;
 		manager.async = async;
@@ -270,7 +279,7 @@ public class AmqpAppender extends AbstractAppender {
 	 * @param event The event.
 	 * @return The modified message.
 	 */
-	public Message postProcessMessageBeforeSend(Message message, Event event) {
+	protected Message postProcessMessageBeforeSend(Message message, Event event) {
 		return message;
 	}
 
@@ -314,15 +323,16 @@ public class AmqpAppender extends AbstractAppender {
 							logEvent.getSource().getLineNumber()));
 		}
 
+		doSend(event, logEvent, amqpProps);
+	}
+
+	private void doSend(Event event, LogEvent logEvent, MessageProperties amqpProps) {
 		StringBuilder msgBody;
 		String routingKey;
-
-		// Send a message
 		try {
 			synchronized (this.layoutMutex) {
-				msgBody = new StringBuilder(new String(getLayout().toByteArray(logEvent), "UTF-8"));
-				routingKey = new String(this.manager.routingKeyLayout.toByteArray(logEvent),
-						"UTF-8");
+				msgBody = new StringBuilder(new String(getLayout().toByteArray(logEvent), StandardCharsets.UTF_8));
+				routingKey = new String(this.manager.routingKeyLayout.toByteArray(logEvent), StandardCharsets.UTF_8);
 			}
 			Message message = null;
 			if (this.manager.charset != null) {
@@ -349,7 +359,7 @@ public class AmqpAppender extends AbstractAppender {
 						AmqpAppender.this.events.add(event);
 					}
 
-				}, (long) (Math.pow(retries, Math.log(retries)) * 1000));
+				}, (long) (Math.pow(retries, Math.log(retries)) * 1000)); // NOSONAR - magic #
 			}
 			else {
 				getHandler().error("Could not send log message " + logEvent.getMessage()
@@ -364,7 +374,7 @@ public class AmqpAppender extends AbstractAppender {
 	@Override
 	protected boolean stop(long timeout, TimeUnit timeUnit, boolean changeLifeCycleState) {
 		boolean stopped = super.stop(timeout, timeUnit, changeLifeCycleState);
-		return stopped & this.manager.stop(timeout, timeUnit);
+		return stopped || this.manager.stop(timeout, timeUnit);
 	}
 
 	/**
@@ -393,6 +403,7 @@ public class AmqpAppender extends AbstractAppender {
 				Thread.currentThread().interrupt();
 			}
 		}
+
 	}
 
 	/**
@@ -429,6 +440,8 @@ public class AmqpAppender extends AbstractAppender {
 	 * Manager class for the appender.
 	 */
 	protected static class AmqpManager extends AbstractManager {
+
+		private static final int DEFAULT_MAX_SENDER_RETRIES = 30;
 
 		/**
 		 * True to send events on separate threads.
@@ -468,7 +481,7 @@ public class AmqpAppender extends AbstractAppender {
 		/**
 		 * How many times to retry sending a message if the broker is unavailable or there is some other error.
 		 */
-		private int maxSenderRetries = 30;
+		private int maxSenderRetries = DEFAULT_MAX_SENDER_RETRIES;
 
 		/**
 		 * RabbitMQ ConnectionFactory.
@@ -514,6 +527,8 @@ public class AmqpAppender extends AbstractAppender {
 		 * Use an SSL connection.
 		 */
 		private boolean useSsl;
+
+		private boolean verifyHostname = true;
 
 		/**
 		 * The SSL algorithm to use.
@@ -571,6 +586,11 @@ public class AmqpAppender extends AbstractAppender {
 		private boolean declareExchange = false;
 
 		/**
+		 * A name for the connection (appears on the RabbitMQ Admin UI).
+		 */
+		private String connectionName;
+
+		/**
 		 * Additional client connection properties to be added to the rabbit connection,
 		 * with the form {@code key:value[,key:value]...}.
 		 */
@@ -612,17 +632,20 @@ public class AmqpAppender extends AbstractAppender {
 			ConnectionFactory rabbitConnectionFactory = createRabbitConnectionFactory();
 			if (rabbitConnectionFactory != null) {
 				this.routingKeyLayout = PatternLayout.newBuilder()
-						.withPattern(this.routingKeyPattern.replaceAll("%X\\{applicationId\\}", this.applicationId))
+						.withPattern(this.routingKeyPattern.replaceAll("%X\\{applicationId}", this.applicationId))
 						.withCharset(Charset.forName(this.charset))
 						.withAlwaysWriteExceptions(false)
 						.withNoConsoleNoAnsi(true)
 						.build();
-				this.connectionFactory = new CachingConnectionFactory(createRabbitConnectionFactory());
+				this.connectionFactory = new CachingConnectionFactory(rabbitConnectionFactory);
+				if (StringUtils.hasText(this.connectionName)) {
+					this.connectionFactory.setConnectionNameStrategy(cf -> this.connectionName);
+				}
 				if (this.addresses != null) {
 					this.connectionFactory.setAddresses(this.addresses);
 				}
 				if (this.clientConnectionProperties != null) {
-					LogAppenderUtils.updateClientConnectionProperties(this.connectionFactory,
+					ConnectionFactoryConfigurationUtils.updateClientConnectionProperties(this.connectionFactory,
 							this.clientConnectionProperties);
 				}
 				setUpExchangeDeclaration();
@@ -658,17 +681,18 @@ public class AmqpAppender extends AbstractAppender {
 		 * @param factoryBean the {@link RabbitConnectionFactoryBean}.
 		 */
 		protected void configureRabbitConnectionFactory(RabbitConnectionFactoryBean factoryBean) {
-
-			Optional.ofNullable(this.host).ifPresent(factoryBean::setHost);
-			Optional.ofNullable(this.port).ifPresent(factoryBean::setPort);
-			Optional.ofNullable(this.username).ifPresent(factoryBean::setUsername);
-			Optional.ofNullable(this.password).ifPresent(factoryBean::setPassword);
-			Optional.ofNullable(this.virtualHost).ifPresent(factoryBean::setVirtualHost);
-			// overrides all preceding items when set
-			Optional.ofNullable(this.uri).ifPresent(factoryBean::setUri);
+			JavaUtils.INSTANCE
+					.acceptIfNotNull(this.host, factoryBean::setHost)
+					.acceptIfNotNull(this.port, factoryBean::setPort)
+					.acceptIfNotNull(this.username, factoryBean::setUsername)
+					.acceptIfNotNull(this.password, factoryBean::setPassword)
+					.acceptIfNotNull(this.virtualHost, factoryBean::setVirtualHost)
+					// overrides all preceding items when set
+					.acceptIfNotNull(this.uri, factoryBean::setUri);
 
 			if (this.useSsl) {
 				factoryBean.setUseSSL(true);
+				factoryBean.setEnableHostnameVerification(this.verifyHostname);
 				if (this.sslAlgorithm != null) {
 					factoryBean.setSslAlgorithm(this.sslAlgorithm);
 				}
@@ -716,7 +740,7 @@ public class AmqpAppender extends AbstractAppender {
 					x = new FanoutExchange(this.exchangeName, this.durable, this.autoDelete);
 				}
 				else if ("headers".equals(this.exchangeType)) {
-					x = new HeadersExchange(this.exchangeType, this.durable, this.autoDelete);
+					x = new HeadersExchange(this.exchangeName, this.durable, this.autoDelete);
 				}
 				else {
 					x = new TopicExchange(this.exchangeName, this.durable, this.autoDelete);

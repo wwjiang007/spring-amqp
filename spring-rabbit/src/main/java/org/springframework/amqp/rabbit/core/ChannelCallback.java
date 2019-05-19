@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,6 +15,8 @@
  */
 
 package org.springframework.amqp.rabbit.core;
+
+import org.springframework.lang.Nullable;
 
 import com.rabbitmq.client.Channel;
 
@@ -36,6 +38,7 @@ public interface ChannelCallback<T> {
 	 * @return The result.
 	 * @throws Exception Not sure what else Rabbit Throws
 	 */
-	T doInRabbit(Channel channel) throws Exception;
+	@Nullable
+	T doInRabbit(Channel channel) throws Exception; // NOSONAR user code might throw anything; cannot change
 
 }

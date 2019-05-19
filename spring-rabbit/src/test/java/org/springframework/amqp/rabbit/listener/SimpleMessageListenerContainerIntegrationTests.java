@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2018 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,8 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import java.util.Arrays;
 import java.util.List;
@@ -33,7 +32,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
@@ -43,12 +41,12 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
-import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.junit.BrokerRunning;
 import org.springframework.amqp.rabbit.junit.BrokerTestUtils;
 import org.springframework.amqp.rabbit.junit.LongRunningIntegrationTest;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.test.LogLevelAdjuster;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.transaction.TransactionDefinition;
@@ -92,9 +90,6 @@ public class SimpleMessageListenerContainerIntegrationTests {
 
 	@Rule
 	public BrokerRunning brokerIsRunning = BrokerRunning.isRunningWithEmptyQueues(queue.getName());
-
-	@Rule
-	public ExpectedException exception = ExpectedException.none();
 
 	private final int messageCount;
 
@@ -215,28 +210,28 @@ public class SimpleMessageListenerContainerIntegrationTests {
 	}
 
 	@Test
-	public void testNullQueue() throws Exception {
-		exception.expect(IllegalArgumentException.class);
-		container = createContainer((MessageListener) (m) -> { }, (Queue) null);
+	public void testNullQueue() {
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> container = createContainer(m -> { }, (Queue) null));
 	}
 
 	@Test
-	public void testNullQueueName() throws Exception {
-		exception.expect(IllegalArgumentException.class);
-		container = createContainer((MessageListener) (m) -> { }, (String) null);
+	public void testNullQueueName() {
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> container = createContainer(m -> { }, (String) null));
 	}
 
-	private void doSunnyDayTest(CountDownLatch latch, Object listener) throws Exception {
+	private void doSunnyDayTest(CountDownLatch latch, MessageListener listener) throws Exception {
 		container = createContainer(listener);
 		for (int i = 0; i < messageCount; i++) {
 			template.convertAndSend(queue.getName(), i + "foo");
 		}
 		boolean waited = latch.await(Math.max(10, messageCount / 20), TimeUnit.SECONDS);
-		assertTrue("Timed out waiting for message", waited);
-		assertNull(template.receiveAndConvert(queue.getName()));
+		assertThat(waited).as("Timed out waiting for message").isTrue();
+		assertThat(template.receiveAndConvert(queue.getName())).isNull();
 	}
 
-	private void doListenerWithExceptionTest(CountDownLatch latch, Object listener) throws Exception {
+	private void doListenerWithExceptionTest(CountDownLatch latch, MessageListener listener) throws Exception {
 		container = createContainer(listener);
 		if (acknowledgeMode.isTransactionAllowed()) {
 			// Should only need one message if it is going to fail
@@ -251,39 +246,39 @@ public class SimpleMessageListenerContainerIntegrationTests {
 		}
 		try {
 			boolean waited = latch.await(10 + Math.max(1, messageCount / 10), TimeUnit.SECONDS);
-			assertTrue("Timed out waiting for message", waited);
+			assertThat(waited).as("Timed out waiting for message").isTrue();
 		}
 		finally {
 			container.shutdown();
 		}
 		if (acknowledgeMode.isTransactionAllowed()) {
-			assertNotNull(template.receiveAndConvert(queue.getName()));
+			assertThat(template.receiveAndConvert(queue.getName())).isNotNull();
 		}
 		else {
-			assertNull(template.receiveAndConvert(queue.getName()));
+			assertThat(template.receiveAndConvert(queue.getName())).isNull();
 		}
 	}
 
-	private SimpleMessageListenerContainer createContainer(Object listener) {
+	private SimpleMessageListenerContainer createContainer(MessageListener listener) {
 		SimpleMessageListenerContainer container = createContainer(listener, queue.getName());
 		container.afterPropertiesSet();
 		container.start();
 		return container;
 	}
 
-	private SimpleMessageListenerContainer createContainer(Object listener, String queue) {
+	private SimpleMessageListenerContainer createContainer(MessageListener listener, String queue) {
 		SimpleMessageListenerContainer container = doCreateContainer(listener);
 		container.setQueueNames(queue);
 		return container;
 	}
 
-	private SimpleMessageListenerContainer createContainer(Object listener, Queue queue) {
+	private SimpleMessageListenerContainer createContainer(MessageListener listener, Queue queue) {
 		SimpleMessageListenerContainer container = doCreateContainer(listener);
 		container.setQueues(queue);
 		return container;
 	}
 
-	private SimpleMessageListenerContainer doCreateContainer(Object listener) {
+	private SimpleMessageListenerContainer doCreateContainer(MessageListener listener) {
 		SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(template.getConnectionFactory());
 		container.setMessageListener(listener);
 		container.setTxSize(txSize);

@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-2017 the original author or authors.
+ * Copyright 2015-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -35,6 +35,10 @@ import org.springframework.core.annotation.AliasFor;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Exchange {
 
+	String TRUE = "true";
+
+	String FALSE = "false";
+
 	/**
 	 * @return the exchange name.
 	 */
@@ -60,24 +64,24 @@ public @interface Exchange {
 	/**
 	 * @return false if the exchange is to be declared as non-durable.
 	 */
-	String durable() default "true";
+	String durable() default TRUE;
 
 	/**
 	 * @return true if the exchange is to be declared as auto-delete.
 	 */
-	String autoDelete() default "false";
+	String autoDelete() default FALSE;
 
 	/**
 	 * @return true if the exchange is to be declared as internal.
 	 * @since 1.6
 	 */
-	String internal() default "false";
+	String internal() default FALSE;
 
 	/**
 	 * @return true if the declaration exceptions should be ignored.
 	 * @since 1.6
 	 */
-	String ignoreDeclarationExceptions() default "false";
+	String ignoreDeclarationExceptions() default FALSE;
 
 	/**
 	 * @return true if the exchange is to be declared as an
@@ -85,12 +89,26 @@ public @interface Exchange {
 	 * plugin on the broker.
 	 * @since 1.6.4
 	 */
-	String delayed() default "false";
+	String delayed() default FALSE;
 
 	/**
 	 * @return the arguments to apply when declaring this exchange.
 	 * @since 1.6
 	 */
 	Argument[] arguments() default {};
+
+	/**
+	 * @return true if the admin(s), if present, should declare this component.
+	 * @since 2.1
+	 */
+	String declare() default TRUE;
+
+	/**
+	 * Return a list of admin bean names that should declare this component.
+	 * By default all admins will declare it
+	 * @return the bean names
+	 * @since 2.1
+	 */
+	String[] admins() default {};
 
 }

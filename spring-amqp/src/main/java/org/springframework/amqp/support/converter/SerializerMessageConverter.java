@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -125,31 +125,11 @@ public class SerializerMessageConverter extends WhiteListDeserializingMessageCon
 		if (properties != null) {
 			String contentType = properties.getContentType();
 			if (contentType != null && contentType.startsWith("text") && !this.ignoreContentType) {
-				String encoding = properties.getContentEncoding();
-				if (encoding == null) {
-					encoding = this.defaultCharset;
-				}
-				try {
-					content = new String(message.getBody(), encoding);
-				}
-				catch (UnsupportedEncodingException e) {
-					throw new MessageConversionException("failed to convert text-based Message content", e);
-				}
+				content = asString(message, properties);
 			}
 			else if (contentType != null && contentType.equals(MessageProperties.CONTENT_TYPE_SERIALIZED_OBJECT)
 					|| this.ignoreContentType) {
-				try {
-					ByteArrayInputStream inputStream = new ByteArrayInputStream(message.getBody());
-					if (this.usingDefaultDeserializer) {
-						content = deserialize(inputStream);
-					}
-					else {
-						content = this.deserializer.deserialize(inputStream);
-					}
-				}
-				catch (IOException e) {
-					throw new MessageConversionException("Could not convert message body", e);
-				}
+				content = deserialize(message);
 			}
 		}
 		if (content == null) {
@@ -158,9 +138,36 @@ public class SerializerMessageConverter extends WhiteListDeserializingMessageCon
 		return content;
 	}
 
-	private Object deserialize(ByteArrayInputStream inputStream) throws IOException {
+	private Object deserialize(Message message) {
 		try {
-			ObjectInputStream objectInputStream = new ConfigurableObjectInputStream(inputStream,
+			ByteArrayInputStream inputStream = new ByteArrayInputStream(message.getBody());
+			if (this.usingDefaultDeserializer) {
+				return deserialize(inputStream);
+			}
+			else {
+				return this.deserializer.deserialize(inputStream);
+			}
+		}
+		catch (IOException e) {
+			throw new MessageConversionException("Could not convert message body", e);
+		}
+	}
+
+	private Object asString(Message message, MessageProperties properties) {
+		String encoding = properties.getContentEncoding();
+		if (encoding == null) {
+			encoding = this.defaultCharset;
+		}
+		try {
+			return new String(message.getBody(), encoding);
+		}
+		catch (UnsupportedEncodingException e) {
+			throw new MessageConversionException("failed to convert text-based Message content", e);
+		}
+	}
+
+	private Object deserialize(ByteArrayInputStream inputStream) throws IOException {
+		try (ObjectInputStream objectInputStream = new ConfigurableObjectInputStream(inputStream,
 					this.defaultDeserializerClassLoader) {
 
 				@Override
@@ -171,7 +178,7 @@ public class SerializerMessageConverter extends WhiteListDeserializingMessageCon
 					return clazz;
 				}
 
-			};
+			}) {
 			return objectInputStream.readObject();
 		}
 		catch (ClassNotFoundException ex) {

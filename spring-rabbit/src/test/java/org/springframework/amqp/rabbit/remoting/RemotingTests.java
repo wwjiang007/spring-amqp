@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,11 +16,8 @@
 
 package org.springframework.amqp.rabbit.remoting;
 
-import static org.hamcrest.Matchers.containsString;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -71,17 +68,17 @@ public class RemotingTests {
 	}
 
 	@Test
-	public void testEcho() throws Exception {
+	public void testEcho() {
 		String reply = client.echo("foo");
-		assertEquals("echo:foo", reply);
+		assertThat(reply).isEqualTo("echo:foo");
 	}
 
 	@Test
 	public void testNoAnswer() throws Exception {
 		latch = new CountDownLatch(1);
 		client.noAnswer("foo");
-		assertTrue(latch.await(5, TimeUnit.SECONDS));
-		assertEquals("received:foo", receivedMessage);
+		assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+		assertThat(receivedMessage).isEqualTo("received:foo");
 	}
 
 	@Test
@@ -91,7 +88,7 @@ public class RemotingTests {
 			fail("Exception expected");
 		}
 		catch (RemoteProxyFailureException e) {
-			assertThat(e.getMessage(), containsString(" - perhaps a timeout in the template?"));
+			assertThat(e.getMessage()).contains(" - perhaps a timeout in the template?");
 		}
 	}
 

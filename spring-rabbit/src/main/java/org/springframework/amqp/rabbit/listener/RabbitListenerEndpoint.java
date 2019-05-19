@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,11 @@
 
 package org.springframework.amqp.rabbit.listener;
 
+import org.springframework.amqp.core.AcknowledgeMode;
+import org.springframework.amqp.rabbit.batch.BatchingStrategy;
+import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.lang.Nullable;
 
 /**
  * Model for a Rabbit listener endpoint. Can be used against a
@@ -66,5 +71,69 @@ public interface RabbitListenerEndpoint {
 	 * @param listenerContainer the listener container to configure
 	 */
 	void setupListenerContainer(MessageListenerContainer listenerContainer);
+
+	/**
+	 * The preferred way for a container factory to pass a message converter
+	 * to the endpoint's adapter.
+	 * @param converter the converter.
+	 * @since 2.0.8
+	 */
+	default void setMessageConverter(MessageConverter converter) {
+		// NOSONAR
+	}
+
+	/**
+	 * Used by the container factory to check if this endpoint supports the
+	 * preferred way for a container factory to pass a message converter
+	 * to the endpoint's adapter. If null is returned, the factory will
+	 * fall back to the legacy method of passing the converter via the
+	 * container.
+	 * @return the converter.
+	 * @since 2.0.8
+	 */
+	@Nullable
+	default MessageConverter getMessageConverter() {
+		return null;
+	}
+
+	/**
+	 * Get the task executor to use for this endpoint's listener container.
+	 * Overrides any executor set on the container factory.
+	 * @return the executor.
+	 * @since 2.2
+	 */
+	@Nullable
+	default TaskExecutor getTaskExecutor() {
+		return null;
+	}
+
+	/**
+	 * Called by the container factory with the factory's batchListener property.
+	 * @param batchListener the batchListener to set.
+	 * @since 2.2
+	 */
+	default void setBatchListener(boolean batchListener) {
+		// NOSONAR empty
+	}
+
+	/**
+	 * Set a {@link BatchingStrategy} to use when debatching messages.
+	 * @param batchingStrategy the batching strategy.
+	 * @since 2.2
+	 * @see #setBatchListener(boolean)
+	 */
+	default void setBatchingStrategy(BatchingStrategy batchingStrategy) {
+		// NOSONAR empty
+	}
+
+	/**
+	 * Override the container factory's {@link AcknowledgeMode}.
+	 * @return the acknowledgment mode.
+	 * @since 2.2
+	 */
+	@Nullable
+	default AcknowledgeMode getAckMode() {
+		return null;
+	}
 
 }

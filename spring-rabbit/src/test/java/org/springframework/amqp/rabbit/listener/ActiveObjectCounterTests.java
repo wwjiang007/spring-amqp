@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,7 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.junit.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -35,17 +35,17 @@ public class ActiveObjectCounterTests {
 	private final ActiveObjectCounter<Object> counter = new ActiveObjectCounter<Object>();
 
 	@Test
-	public void testActiveCount() throws Exception {
+	public void testActiveCount() {
 		final Object object1 = new Object();
 		final Object object2 = new Object();
 		counter.add(object1);
 		counter.add(object2);
-		assertEquals(2, counter.getCount());
+		assertThat(counter.getCount()).isEqualTo(2);
 		counter.release(object2);
-		assertEquals(1, counter.getCount());
+		assertThat(counter.getCount()).isEqualTo(1);
 		counter.release(object1);
 		counter.release(object1);
-		assertEquals(0, counter.getCount());
+		assertThat(counter.getCount()).isEqualTo(0);
 	}
 
 	@Test
@@ -60,15 +60,15 @@ public class ActiveObjectCounterTests {
 			counter.release(object2);
 			return true;
 		});
-		assertEquals(true, counter.await(1000L, TimeUnit.MILLISECONDS));
-		assertEquals(true, future.get());
+		assertThat(counter.await(1000L, TimeUnit.MILLISECONDS)).isEqualTo(true);
+		assertThat(future.get()).isEqualTo(true);
 	}
 
 	@Test
 	public void testTimeoutWaitForLocks() throws Exception {
 		final Object object1 = new Object();
 		counter.add(object1);
-		assertEquals(false, counter.await(200L, TimeUnit.MILLISECONDS));
+		assertThat(counter.await(200L, TimeUnit.MILLISECONDS)).isEqualTo(false);
 	}
 
 }

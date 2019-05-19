@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2017 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,6 +24,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import org.springframework.core.NamedThreadLocal;
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 
 /**
@@ -38,14 +39,19 @@ import org.springframework.util.Assert;
  * Use {@code TransactionSynchronizationManager} and {@code ResourceHolder} instead.
  *
  * @author Artem Bilan
+ * @author Gary Russell
  * @since 1.3
  */
 public final class SimpleResourceHolder {
 
-	private static final Log logger = LogFactory.getLog(SimpleResourceHolder.class);
+	private static final String FOR_KEY = "] for key [";
 
-	private static final ThreadLocal<Map<Object, Object>> resources = new NamedThreadLocal<Map<Object, Object>>("Simple resources");
+	private static final String BOUND_TO_THREAD = "] bound to thread [";
 
+	private static final Log logger = LogFactory.getLog(SimpleResourceHolder.class); // NOSONAR lower case
+
+	private static final ThreadLocal<Map<Object, Object>> resources = // NOSONAR lower case
+			new NamedThreadLocal<Map<Object, Object>>("Simple resources");
 
 	/**
 	 * Return all resources that are bound to the current thread.
@@ -77,10 +83,12 @@ public final class SimpleResourceHolder {
 	 * @return a value bound to the current thread (usually the active
 	 * resource object), or <code>null</code> if none
 	 */
+	@Nullable
 	public static Object get(Object key) {
 		Object value = doGet(key);
 		if (value != null && logger.isTraceEnabled()) {
-			logger.trace("Retrieved value [" + value + "] for key [" + key + "] bound to thread [" + Thread.currentThread().getName() + "]");
+			logger.trace("Retrieved value [" + value + FOR_KEY + key + BOUND_TO_THREAD
+					+ Thread.currentThread().getName() + "]");
 		}
 		return value;
 	}
@@ -90,6 +98,7 @@ public final class SimpleResourceHolder {
 	 * @param actualKey the key.
 	 * @return the resource object.
 	 */
+	@Nullable
 	private static Object doGet(Object actualKey) {
 		Map<Object, Object> map = resources.get();
 		if (map == null) {
@@ -113,10 +122,12 @@ public final class SimpleResourceHolder {
 			resources.set(map);
 		}
 		Object oldValue = map.put(key, value);
-		Assert.isNull(oldValue, () -> "Already value [" + oldValue + "] for key [" + key + "] bound to thread [" + Thread.currentThread().getName() + "]");
+		Assert.isNull(oldValue, () -> "Already value [" + oldValue + FOR_KEY + key + BOUND_TO_THREAD
+				+ Thread.currentThread().getName() + "]");
 
 		if (logger.isTraceEnabled()) {
-			logger.trace("Bound value [" + value + "] for key [" + key + "] to thread [" + Thread.currentThread().getName() + "]");
+			logger.trace(
+					"Bound value [" + value + FOR_KEY + key + "] to thread [" + Thread.currentThread().getName() + "]");
 		}
 	}
 
@@ -128,7 +139,8 @@ public final class SimpleResourceHolder {
 	 */
 	public static Object unbind(Object key) throws IllegalStateException {
 		Object value = unbindIfPossible(key);
-		Assert.notNull(value, () -> "No value for key [" + key + "] bound to thread [" + Thread.currentThread().getName() + "]");
+		Assert.notNull(value,
+				() -> "No value for key [" + key + BOUND_TO_THREAD + Thread.currentThread().getName() + "]");
 		return value;
 	}
 
@@ -137,6 +149,7 @@ public final class SimpleResourceHolder {
 	 * @param key the key to unbind (usually the resource factory)
 	 * @return the previously bound value, or <code>null</code> if none bound
 	 */
+	@Nullable
 	public static Object unbindIfPossible(Object key) {
 		Map<Object, Object> map = resources.get();
 		if (map == null) {
@@ -149,7 +162,8 @@ public final class SimpleResourceHolder {
 		}
 
 		if (value != null && logger.isTraceEnabled()) {
-			logger.trace("Removed value [" + value + "] for key [" + key + "] from thread [" + Thread.currentThread().getName() + "]");
+			logger.trace("Removed value [" + value + FOR_KEY + key + "] from thread ["
+					+ Thread.currentThread().getName() + "]");
 		}
 		return value;
 	}

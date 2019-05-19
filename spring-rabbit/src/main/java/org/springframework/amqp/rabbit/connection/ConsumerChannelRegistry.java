@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +18,8 @@ package org.springframework.amqp.rabbit.connection;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+
+import org.springframework.lang.Nullable;
 
 import com.rabbitmq.client.Channel;
 
@@ -34,9 +36,10 @@ import com.rabbitmq.client.Channel;
  */
 public final class ConsumerChannelRegistry {
 
-	private static final Log logger = LogFactory.getLog(ConsumerChannelRegistry.class);
+	private static final Log logger = LogFactory.getLog(ConsumerChannelRegistry.class); // NOSONAR - lower case
 
-	private static final ThreadLocal<ChannelHolder> consumerChannel = new ThreadLocal<ChannelHolder>();
+	private static final ThreadLocal<ChannelHolder> consumerChannel // NOSONAR - lower case
+		= new ThreadLocal<ChannelHolder>();
 
 	private ConsumerChannelRegistry() {
 		super();
@@ -78,6 +81,7 @@ public final class ConsumerChannelRegistry {
 	 *
 	 * @return The channel.
 	 */
+	@Nullable
 	public static Channel getConsumerChannel() {
 		ChannelHolder channelHolder = consumerChannel.get();
 		Channel channel = null;
@@ -94,6 +98,7 @@ public final class ConsumerChannelRegistry {
 	 * @param connectionFactory The connection factory.
 	 * @return The channel.
 	 */
+	@Nullable
 	public static Channel getConsumerChannel(ConnectionFactory connectionFactory) {
 		ChannelHolder channelHolder = consumerChannel.get();
 		Channel channel = null;

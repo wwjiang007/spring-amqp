@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2018 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,57 +16,57 @@
 
 package org.springframework.amqp.rabbit.core;
 
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.equalTo;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.assertj.core.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.BDDMockito.willReturn;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.withSettings;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 import org.mockito.Mockito;
 
 import org.springframework.amqp.AmqpAuthenticationException;
+import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.Address;
 import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.ReceiveAndReplyCallback;
 import org.springframework.amqp.rabbit.connection.AbstractRoutingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ChannelProxy;
-import org.springframework.amqp.rabbit.connection.PublisherCallbackChannelConnectionFactory;
+import org.springframework.amqp.rabbit.connection.PublisherCallbackChannel;
 import org.springframework.amqp.rabbit.connection.SimpleRoutingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.SingleConnectionFactory;
-import org.springframework.amqp.rabbit.support.PublisherCallbackChannel;
 import org.springframework.amqp.support.converter.SimpleMessageConverter;
 import org.springframework.amqp.utils.SerializationUtils;
 import org.springframework.context.ApplicationContext;
 import org.springframework.expression.Expression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.retry.support.RetryTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
@@ -80,19 +80,19 @@ import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.Consumer;
 import com.rabbitmq.client.Envelope;
+import com.rabbitmq.client.ShutdownListener;
+import com.rabbitmq.client.ShutdownSignalException;
 import com.rabbitmq.client.impl.AMQImpl;
 import com.rabbitmq.client.impl.AMQImpl.Queue.DeclareOk;
 
 /**
  * @author Gary Russell
  * @author Artem Bilan
+ * @author Mohammad Hewedy
  * @since 1.0.1
  *
  */
 public class RabbitTemplateTests {
-
-	@Rule
-	public ExpectedException exception = ExpectedException.none();
 
 	@Test
 	public void returnConnectionAfterCommit() throws Exception {
@@ -120,11 +120,11 @@ public class RabbitTemplateTests {
 		Connection mockConnection = mock(Connection.class);
 		Channel mockChannel = mock(Channel.class);
 
-		when(mockConnectionFactory.newConnection(any(ExecutorService.class), anyString())).thenReturn(mockConnection);
-		when(mockConnection.isOpen()).thenReturn(true);
-		when(mockConnection.createChannel()).thenReturn(mockChannel);
+		given(mockConnectionFactory.newConnection(any(ExecutorService.class), anyString())).willReturn(mockConnection);
+		given(mockConnection.isOpen()).willReturn(true);
+		given(mockConnection.createChannel()).willReturn(mockChannel);
 
-		when(mockChannel.isOpen()).thenReturn(true);
+		given(mockChannel.isOpen()).willReturn(true);
 
 		CachingConnectionFactory connectionFactory = new CachingConnectionFactory(mockConnectionFactory);
 		connectionFactory.setExecutor(mock(ExecutorService.class));
@@ -149,7 +149,7 @@ public class RabbitTemplateTests {
 		RabbitTemplate template = new RabbitTemplate();
 		byte[] payload = "Hello, world!".getBytes();
 		Message message = template.convertMessageIfNecessary(payload);
-		assertSame(payload, message.getBody());
+		assertThat(message.getBody()).isSameAs(payload);
 	}
 
 	@Test
@@ -157,23 +157,23 @@ public class RabbitTemplateTests {
 		RabbitTemplate template = new RabbitTemplate();
 		String payload = "Hello, world!";
 		Message message = template.convertMessageIfNecessary(payload);
-		assertEquals(payload, new String(message.getBody(), SimpleMessageConverter.DEFAULT_CHARSET));
+		assertThat(new String(message.getBody(), SimpleMessageConverter.DEFAULT_CHARSET)).isEqualTo(payload);
 	}
 
 	@Test
-	public void testConvertSerializable() throws Exception {
+	public void testConvertSerializable() {
 		RabbitTemplate template = new RabbitTemplate();
 		Long payload = 43L;
 		Message message = template.convertMessageIfNecessary(payload);
-		assertEquals(payload, SerializationUtils.deserialize(message.getBody()));
+		assertThat(SerializationUtils.deserialize(message.getBody())).isEqualTo(payload);
 	}
 
 	@Test
-	public void testConvertMessage() throws Exception {
+	public void testConvertMessage() {
 		RabbitTemplate template = new RabbitTemplate();
 		Message input = new Message("Hello, world!".getBytes(), new MessageProperties());
 		Message message = template.convertMessageIfNecessary(input);
-		assertSame(input, message);
+		assertThat(message).isSameAs(input);
 	}
 
 	@Test // AMQP-249
@@ -182,17 +182,17 @@ public class RabbitTemplateTests {
 		Connection mockConnection = mock(Connection.class);
 		Channel mockChannel = mock(Channel.class);
 
-		when(mockConnectionFactory.newConnection(any(ExecutorService.class), anyString())).thenReturn(mockConnection);
-		when(mockConnection.isOpen()).thenReturn(true);
-		when(mockConnection.createChannel()).thenReturn(mockChannel);
+		given(mockConnectionFactory.newConnection(any(ExecutorService.class), anyString())).willReturn(mockConnection);
+		given(mockConnection.isOpen()).willReturn(true);
+		given(mockConnection.createChannel()).willReturn(mockChannel);
 
-		when(mockChannel.queueDeclare()).thenReturn(new AMQImpl.Queue.DeclareOk("foo", 0, 0));
+		given(mockChannel.queueDeclare()).willReturn(new AMQImpl.Queue.DeclareOk("foo", 0, 0));
 
 		final AtomicReference<Consumer> consumer = new AtomicReference<Consumer>();
-		doAnswer(invocation -> {
+		willAnswer(invocation -> {
 			consumer.set(invocation.getArgument(6));
 			return null;
-		}).when(mockChannel).basicConsume(anyString(), anyBoolean(), anyString(),
+		}).given(mockChannel).basicConsume(anyString(), anyBoolean(), anyString(),
 				anyBoolean(), anyBoolean(), isNull(), any(Consumer.class));
 		SingleConnectionFactory connectionFactory = new SingleConnectionFactory(mockConnectionFactory);
 		connectionFactory.setExecutor(mock(ExecutorService.class));
@@ -209,10 +209,10 @@ public class RabbitTemplateTests {
 	public void testRetry() throws Exception {
 		ConnectionFactory mockConnectionFactory = mock(ConnectionFactory.class);
 		final AtomicInteger count = new AtomicInteger();
-		doAnswer(invocation -> {
+		willAnswer(invocation -> {
 			count.incrementAndGet();
 			throw new AuthenticationFailureException("foo");
-		}).when(mockConnectionFactory).newConnection(any(ExecutorService.class), anyString());
+		}).given(mockConnectionFactory).newConnection(any(ExecutorService.class), anyString());
 
 		SingleConnectionFactory connectionFactory = new SingleConnectionFactory(mockConnectionFactory);
 		connectionFactory.setExecutor(mock(ExecutorService.class));
@@ -222,19 +222,19 @@ public class RabbitTemplateTests {
 			template.convertAndSend("foo", "bar", "baz");
 		}
 		catch (AmqpAuthenticationException e) {
-			assertThat(e.getMessage(), containsString("foo"));
+			assertThat(e.getMessage()).contains("foo");
 		}
-		assertEquals(3, count.get());
+		assertThat(count.get()).isEqualTo(3);
 	}
 
 	@Test
 	public void testRecovery() throws Exception {
 		ConnectionFactory mockConnectionFactory = mock(ConnectionFactory.class);
 		final AtomicInteger count = new AtomicInteger();
-		doAnswer(invocation -> {
+		willAnswer(invocation -> {
 			count.incrementAndGet();
 			throw new AuthenticationFailureException("foo");
-		}).when(mockConnectionFactory).newConnection(any(ExecutorService.class), anyString());
+		}).given(mockConnectionFactory).newConnection(any(ExecutorService.class), anyString());
 
 		SingleConnectionFactory connectionFactory = new SingleConnectionFactory(mockConnectionFactory);
 		connectionFactory.setExecutor(mock(ExecutorService.class));
@@ -248,23 +248,21 @@ public class RabbitTemplateTests {
 			return null;
 		});
 		template.convertAndSend("foo", "bar", "baz");
-		assertEquals(3, count.get());
-		assertTrue(recoverInvoked.get());
+		assertThat(count.get()).isEqualTo(3);
+		assertThat(recoverInvoked.get()).isTrue();
 	}
 
 	@Test
 	public void testPublisherConfirmsReturnsSetup() {
 		org.springframework.amqp.rabbit.connection.ConnectionFactory cf =
-				mock(org.springframework.amqp.rabbit.connection.ConnectionFactory.class,
-						withSettings().extraInterfaces(PublisherCallbackChannelConnectionFactory.class));
-		PublisherCallbackChannelConnectionFactory pcccf = (PublisherCallbackChannelConnectionFactory) cf;
-		when(pcccf.isPublisherConfirms()).thenReturn(true);
-		when(pcccf.isPublisherReturns()).thenReturn(true);
+				mock(org.springframework.amqp.rabbit.connection.ConnectionFactory.class);
+		given(cf.isPublisherConfirms()).willReturn(true);
+		given(cf.isPublisherReturns()).willReturn(true);
 		org.springframework.amqp.rabbit.connection.Connection conn =
 				mock(org.springframework.amqp.rabbit.connection.Connection.class);
-		when(cf.createConnection()).thenReturn(conn);
+		given(cf.createConnection()).willReturn(conn);
 		PublisherCallbackChannel channel = mock(PublisherCallbackChannel.class);
-		when(conn.createChannel(false)).thenReturn(channel);
+		given(conn.createChannel(false)).willReturn(channel);
 		RabbitTemplate template = new RabbitTemplate(cf);
 		template.convertAndSend("foo");
 		verify(channel).addListener(template);
@@ -273,16 +271,16 @@ public class RabbitTemplateTests {
 	@Test
 	public void testNoListenerAllowed1() {
 		RabbitTemplate template = new RabbitTemplate();
-		this.exception.expect(IllegalStateException.class);
-		template.expectedQueueNames();
+		assertThatIllegalStateException()
+			.isThrownBy(() -> template.expectedQueueNames());
 	}
 
 	@Test
 	public void testNoListenerAllowed2() {
 		RabbitTemplate template = new RabbitTemplate();
 		template.setReplyAddress(Address.AMQ_RABBITMQ_REPLY_TO);
-		this.exception.expect(IllegalStateException.class);
-		template.expectedQueueNames();
+		assertThatIllegalStateException()
+			.isThrownBy(() -> template.expectedQueueNames());
 	}
 
 	public final static AtomicInteger LOOKUP_KEY_COUNT = new AtomicInteger();
@@ -347,7 +345,7 @@ public class RabbitTemplateTests {
 		given(connection.isOpen()).willReturn(true);
 		given(connection.createChannel()).willReturn(channel1, channel2);
 		DeclareOk dok = new DeclareOk("foo", 0, 0);
-		willReturn(dok).given(channel1).queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), isNull());
+		willReturn(dok).given(channel1).queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), anyMap());
 		CachingConnectionFactory ccf = new CachingConnectionFactory(cf);
 		ccf.setExecutor(mock(ExecutorService.class));
 		RabbitTemplate rabbitTemplate = new RabbitTemplate(ccf);
@@ -360,14 +358,92 @@ public class RabbitTemplateTests {
 		AtomicReference<Channel> templateChannel = new AtomicReference<>();
 		new TransactionTemplate(new TestTransactionManager()).execute(s -> {
 			return rabbitTemplate.execute(c -> {
-				templateChannel.set(c);
+				templateChannel.set(((ChannelProxy) c).getTargetChannel());
 				return true;
 			});
 		});
 		verify(channel1).txSelect();
-		verify(channel1).queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), isNull());
-		assertThat(((ChannelProxy) templateChannel.get()).getTargetChannel(), equalTo(channel1));
+		verify(channel1).queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), anyMap());
+		assertThat(templateChannel.get()).isEqualTo(channel1);
 		verify(channel1).txCommit();
+	}
+
+	@Test
+	public void testShutdownWhileWaitingForReply() throws Exception {
+		ConnectionFactory mockConnectionFactory = mock(ConnectionFactory.class);
+		Connection mockConnection = mock(Connection.class);
+		Channel mockChannel = mock(Channel.class);
+
+		given(mockConnectionFactory.newConnection(any(ExecutorService.class), anyString())).willReturn(mockConnection);
+		given(mockConnection.isOpen()).willReturn(true);
+		given(mockConnection.createChannel()).willReturn(mockChannel);
+		given(mockChannel.queueDeclare()).willReturn(new AMQImpl.Queue.DeclareOk("foo", 0, 0));
+		final AtomicReference<ShutdownListener> listener = new AtomicReference<>();
+		final CountDownLatch shutdownLatch = new CountDownLatch(1);
+		willAnswer(invocation -> {
+			listener.set(invocation.getArgument(0));
+			shutdownLatch.countDown();
+			return null;
+		}).given(mockChannel).addShutdownListener(any());
+		SingleConnectionFactory connectionFactory = new SingleConnectionFactory(mockConnectionFactory);
+		connectionFactory.setExecutor(mock(ExecutorService.class));
+		RabbitTemplate template = new RabbitTemplate(connectionFactory);
+		template.setReplyTimeout(60_000);
+		Message input = new Message("Hello, world!".getBytes(), new MessageProperties());
+		ExecutorService exec = Executors.newSingleThreadExecutor();
+		exec.execute(() -> {
+			try {
+				shutdownLatch.await(10, TimeUnit.SECONDS);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			listener.get().shutdownCompleted(new ShutdownSignalException(true, false, null, null));
+		});
+		try {
+			template.doSendAndReceiveWithTemporary("foo", "bar", input, null);
+			fail("Expected exception");
+		}
+		catch (AmqpException e) {
+			assertThat(e.getCause()).isInstanceOf(ShutdownSignalException.class);
+		}
+		exec.shutdownNow();
+	}
+
+	@Test
+	public void testAddAndRemoveBeforePublishPostProcessors() {
+		DoNothingMPP mpp1 = new DoNothingMPP();
+		DoNothingMPP mpp2 = new DoNothingMPP();
+		DoNothingMPP mpp3 = new DoNothingMPP();
+
+		RabbitTemplate rabbitTemplate = new RabbitTemplate();
+		rabbitTemplate.addBeforePublishPostProcessors(mpp1, mpp2);
+		rabbitTemplate.addBeforePublishPostProcessors(mpp3);
+		boolean removed = rabbitTemplate.removeBeforePublishPostProcessor(mpp1);
+		@SuppressWarnings("unchecked")
+		Collection<Object> beforePublishPostProcessors =
+				(Collection<Object>) ReflectionTestUtils.getField(rabbitTemplate, "beforePublishPostProcessors");
+
+		assertThat(removed).isEqualTo(true);
+		assertThat(beforePublishPostProcessors).containsExactly(mpp2, mpp3);
+	}
+
+	@Test
+	public void testAddAndRemoveAfterReceivePostProcessors() {
+		DoNothingMPP mpp1 = new DoNothingMPP();
+		DoNothingMPP mpp2 = new DoNothingMPP();
+		DoNothingMPP mpp3 = new DoNothingMPP();
+
+		RabbitTemplate rabbitTemplate = new RabbitTemplate();
+		rabbitTemplate.addAfterReceivePostProcessors(mpp1, mpp2);
+		rabbitTemplate.addAfterReceivePostProcessors(mpp3);
+		boolean removed = rabbitTemplate.removeAfterReceivePostProcessor(mpp1);
+		@SuppressWarnings("unchecked")
+		Collection<Object> afterReceivePostProcessors =
+				(Collection<Object>) ReflectionTestUtils.getField(rabbitTemplate, "afterReceivePostProcessors");
+
+		assertThat(removed).isEqualTo(true);
+		assertThat(afterReceivePostProcessors).containsExactly(mpp2, mpp3);
 	}
 
 	@SuppressWarnings("serial")
@@ -394,6 +470,14 @@ public class RabbitTemplateTests {
 		protected void doRollback(DefaultTransactionStatus status) throws TransactionException {
 		}
 
+	}
+
+	private class DoNothingMPP implements MessagePostProcessor {
+
+		@Override
+		public Message postProcessMessage(Message message) throws AmqpException {
+			return message;
+		}
 	}
 
 }

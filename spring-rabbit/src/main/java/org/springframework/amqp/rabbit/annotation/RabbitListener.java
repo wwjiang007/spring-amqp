@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2017 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -208,8 +208,13 @@ public @interface RabbitListener {
 	String returnExceptions() default "";
 
 	/**
-	 * Set an {@link org.springframework.amqp.rabbit.listener.RabbitListenerErrorHandler}
-	 * to invoke if the listener method throws an exception.
+	 * Set an
+	 * {@link org.springframework.amqp.rabbit.listener.api.RabbitListenerErrorHandler} to
+	 * invoke if the listener method throws an exception. A simple String representing the
+	 * bean name. If a Spel expression (#{...}) is provided, the expression must
+	 * evaluate to a bean name or a
+	 * {@link org.springframework.amqp.rabbit.listener.api.RabbitListenerErrorHandler}
+	 * instance.
 	 * @return the error handler.
 	 * @since 2.0
 	 */
@@ -239,5 +244,23 @@ public @interface RabbitListener {
 	 * @since 2.0
 	 */
 	String autoStartup() default "";
+
+	/**
+	 * Set the task executor bean name to use for this listener's container; overrides
+	 * any executor set on the container factory.
+	 * @return the executor bean name.
+	 * @since 2.2
+	 */
+	String executor() default "";
+
+	/**
+	 * Override the container factory
+	 * {@link org.springframework.amqp.core.AcknowledgeMode} property. Must be one of the
+	 * valid enumerations. If a SpEL expression is provided, it must evaluate to a
+	 * {@link String} or {@link org.springframework.amqp.core.AcknowledgeMode}.
+	 * @return the acknowledgement mode.
+	 * @since 2.2
+	 */
+	String ackMode() default "";
 
 }

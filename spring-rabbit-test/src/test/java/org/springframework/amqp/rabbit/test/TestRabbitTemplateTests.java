@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 the original author or authors.
+ * Copyright 2017-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,14 +16,11 @@
 
 package org.springframework.amqp.rabbit.test;
 
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.junit.Assert.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.Mockito.mock;
-
-import java.io.IOException;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -45,6 +42,8 @@ import com.rabbitmq.client.Channel;
 
 /**
  * @author Gary Russell
+ * @author Artem Bilan
+ *
  * @since 2.0
  *
  */
@@ -60,20 +59,20 @@ public class TestRabbitTemplateTests {
 	@Test
 	public void testSimpleSends() {
 		this.template.convertAndSend("foo", "hello1");
-		assertThat(this.config.fooIn, equalTo("foo:hello1"));
+		assertThat(this.config.fooIn).isEqualTo("foo:hello1");
 		this.template.convertAndSend("bar", "hello2");
-		assertThat(this.config.barIn, equalTo("bar:hello2"));
-		assertThat(this.config.smlc1In, equalTo("smlc1:"));
+		assertThat(this.config.barIn).isEqualTo("bar:hello2");
+		assertThat(this.config.smlc1In).isEqualTo("smlc1:");
 		this.template.convertAndSend("foo", "hello3");
-		assertThat(this.config.fooIn, equalTo("foo:hello1"));
+		assertThat(this.config.fooIn).isEqualTo("foo:hello1");
 		this.template.convertAndSend("bar", "hello4");
-		assertThat(this.config.barIn, equalTo("bar:hello2"));
-		assertThat(this.config.smlc1In, equalTo("smlc1:hello3hello4"));
+		assertThat(this.config.barIn).isEqualTo("bar:hello2");
+		assertThat(this.config.smlc1In).isEqualTo("smlc1:hello3hello4");
 	}
 
 	@Test
 	public void testSendAndReceive() {
-		assertThat(this.template.convertSendAndReceive("baz", "hello"), equalTo("baz:hello"));
+		assertThat(this.template.convertSendAndReceive("baz", "hello")).isEqualTo("baz:hello");
 	}
 
 	@Configuration
@@ -87,12 +86,12 @@ public class TestRabbitTemplateTests {
 		public String smlc1In = "smlc1:";
 
 		@Bean
-		public TestRabbitTemplate template() throws IOException {
+		public TestRabbitTemplate template() {
 			return new TestRabbitTemplate(connectionFactory());
 		}
 
 		@Bean
-		public ConnectionFactory connectionFactory() throws IOException {
+		public ConnectionFactory connectionFactory() {
 			ConnectionFactory factory = mock(ConnectionFactory.class);
 			Connection connection = mock(Connection.class);
 			Channel channel = mock(Channel.class);
@@ -103,7 +102,7 @@ public class TestRabbitTemplateTests {
 		}
 
 		@Bean
-		public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory() throws IOException {
+		public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory() {
 			SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
 			factory.setConnectionFactory(connectionFactory());
 			return factory;
@@ -125,7 +124,7 @@ public class TestRabbitTemplateTests {
 		}
 
 		@Bean
-		public SimpleMessageListenerContainer smlc1() throws IOException {
+		public SimpleMessageListenerContainer smlc1() {
 			SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory());
 			container.setQueueNames("foo", "bar");
 			container.setMessageListener(new MessageListenerAdapter(new Object() {

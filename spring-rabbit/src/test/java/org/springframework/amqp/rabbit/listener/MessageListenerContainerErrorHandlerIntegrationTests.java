@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2018 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,12 +16,8 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.doAnswer;
@@ -51,16 +47,17 @@ import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
 import org.springframework.amqp.core.MessageListener;
+import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
-import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.junit.BrokerRunning;
 import org.springframework.amqp.rabbit.junit.BrokerTestUtils;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
-import org.springframework.amqp.rabbit.listener.exception.ListenerExecutionFailedException;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
+import org.springframework.amqp.rabbit.support.ListenerExecutionFailedException;
 import org.springframework.amqp.support.converter.MessageConversionException;
 import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.beans.DirectFieldAccessor;
@@ -133,14 +130,14 @@ public class MessageListenerContainerErrorHandlerIntegrationTests {
 		doReturn(true).when(logger).isWarnEnabled();
 		new DirectFieldAccessor(container).setPropertyValue("logger", logger);
 		template.convertAndSend(queue.getName(), "baz");
-		assertTrue(messageReceived.await(10, TimeUnit.SECONDS));
+		assertThat(messageReceived.await(10, TimeUnit.SECONDS)).isTrue();
 		Object consumer = TestUtils.getPropertyValue(container, "consumers", Set.class)
 				.iterator().next();
 		Log qLogger = spy(TestUtils.getPropertyValue(consumer, "logger", Log.class));
 		doReturn(true).when(qLogger).isDebugEnabled();
 		new DirectFieldAccessor(consumer).setPropertyValue("logger", qLogger);
 		spiedQLogger.countDown();
-		assertTrue(errorHandled.await(10, TimeUnit.SECONDS));
+		assertThat(errorHandled.await(10, TimeUnit.SECONDS)).isTrue();
 		container.stop();
 		verify(logger, never()).warn(contains("Consumer raised exception"), any(Throwable.class));
 		verify(qLogger).debug(contains("Rejecting messages (requeue=false)"));
@@ -234,8 +231,8 @@ public class MessageListenerContainerErrorHandlerIntegrationTests {
 			Thread.sleep(100);
 			rejected = template.receive(dlq.getName());
 		}
-		assertTrue("Message did not arrive in DLQ", n < 100);
-		assertEquals("foo", new String(rejected.getBody()));
+		assertThat(n < 100).as("Message did not arrive in DLQ").isTrue();
+		assertThat(new String(rejected.getBody())).isEqualTo("foo");
 
 
 		// Verify that the exception strategy has access to the message
@@ -257,20 +254,20 @@ public class MessageListenerContainerErrorHandlerIntegrationTests {
 			Thread.sleep(100);
 			rejected = template.receive(dlq.getName());
 		}
-		assertTrue("Message did not arrive in DLQ", n < 100);
-		assertEquals("foo", new String(rejected.getBody()));
-		assertNotNull(failed.get());
+		assertThat(n < 100).as("Message did not arrive in DLQ").isTrue();
+		assertThat(new String(rejected.getBody())).isEqualTo("foo");
+		assertThat(failed.get()).isNotNull();
 
 		container.stop();
 
 		Exception e = new ListenerExecutionFailedException("foo", new MessageConversionException("bar"),
-				mock(Message.class));
+				new Message("".getBytes(), new MessageProperties()));
 		try {
 			eh.handleError(e);
 			fail("expected exception");
 		}
 		catch (AmqpRejectAndDontRequeueException aradre) {
-			assertSame(e, aradre.getCause());
+			assertThat(aradre.getCause()).isSameAs(e);
 		}
 		e = new ListenerExecutionFailedException("foo", new MessageConversionException("bar",
 				new AmqpRejectAndDontRequeueException("baz")), mock(Message.class));
@@ -278,7 +275,7 @@ public class MessageListenerContainerErrorHandlerIntegrationTests {
 		((DisposableBean) template.getConnectionFactory()).destroy();
 	}
 
-	public void doTest(int messageCount, ErrorHandler errorHandler, CountDownLatch latch, Object listener)
+	public void doTest(int messageCount, ErrorHandler errorHandler, CountDownLatch latch, MessageListener listener)
 			throws Exception {
 		this.errorsHandled = new CountDownLatch(messageCount);
 		int concurrentConsumers = 1;
@@ -306,12 +303,11 @@ public class MessageListenerContainerErrorHandlerIntegrationTests {
 		try {
 			boolean waited = latch.await(5000, TimeUnit.MILLISECONDS);
 			if (messageCount > 1) {
-				assertTrue("Expected to receive all messages before stop", waited);
+				assertThat(waited).as("Expected to receive all messages before stop").isTrue();
 			}
 
-			assertTrue("Not enough error handling, remaining:" + this.errorsHandled.getCount(),
-					this.errorsHandled.await(10, TimeUnit.SECONDS));
-			assertNull(template.receiveAndConvert(queue.getName()));
+			assertThat(this.errorsHandled.await(10, TimeUnit.SECONDS)).as("Not enough error handling, remaining:" + this.errorsHandled.getCount()).isTrue();
+			assertThat(template.receiveAndConvert(queue.getName())).isNull();
 		}
 		finally {
 			container.shutdown();

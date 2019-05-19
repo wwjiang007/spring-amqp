@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,8 @@
 
 package org.springframework.amqp.rabbit.config;
 
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 import org.junit.After;
 import org.junit.Before;
@@ -83,8 +81,8 @@ public class MismatchedQueueDeclarationTests {
 		Channel channel = this.connectionFactory.createConnection().createChannel(false);
 		channel.queueDeclarePassive("mismatch.bar");
 		this.admin.deleteQueue("mismatch.bar");
-		assertNotNull(this.admin.getQueueProperties("mismatch.foo"));
-		assertNull(this.admin.getQueueProperties("mismatch.bar"));
+		assertThat(this.admin.getQueueProperties("mismatch.foo")).isNotNull();
+		assertThat(this.admin.getQueueProperties("mismatch.bar")).isNull();
 
 		env = new StandardEnvironment();
 		env.addActiveProfile("basicAdmin");
@@ -97,10 +95,10 @@ public class MismatchedQueueDeclarationTests {
 			fail("Expected exception - basic admin fails with mismatched declarations");
 		}
 		catch (Exception e) {
-			assertTrue(e.getCause().getCause().getMessage().contains("inequivalent arg 'x-message-ttl'"));
+			assertThat(e.getCause().getCause().getMessage().contains("inequivalent arg 'x-message-ttl'")).isTrue();
 		}
-		assertNotNull(this.admin.getQueueProperties("mismatch.foo"));
-		assertNull(this.admin.getQueueProperties("mismatch.bar"));
+		assertThat(this.admin.getQueueProperties("mismatch.foo")).isNotNull();
+		assertThat(this.admin.getQueueProperties("mismatch.bar")).isNull();
 		context.close();
 	}
 
@@ -118,8 +116,8 @@ public class MismatchedQueueDeclarationTests {
 		Channel channel = this.connectionFactory.createConnection().createChannel(false);
 		channel.queueDeclarePassive("mismatch.bar");
 		this.admin.deleteQueue("mismatch.bar");
-		assertNotNull(this.admin.getQueueProperties("mismatch.foo"));
-		assertNull(this.admin.getQueueProperties("mismatch.bar"));
+		assertThat(this.admin.getQueueProperties("mismatch.foo")).isNotNull();
+		assertThat(this.admin.getQueueProperties("mismatch.bar")).isNull();
 
 		context = new ClassPathXmlApplicationContext();
 		context.setConfigLocation("org/springframework/amqp/rabbit/config/MismatchedQueueDeclarationTests-context.xml");
@@ -130,8 +128,8 @@ public class MismatchedQueueDeclarationTests {
 		context.refresh();
 		channel = this.connectionFactory.createConnection().createChannel(false);
 		context.getBean(CachingConnectionFactory.class).createConnection();
-		assertNotNull(this.admin.getQueueProperties("mismatch.foo"));
-		assertNotNull(this.admin.getQueueProperties("mismatch.bar"));
+		assertThat(this.admin.getQueueProperties("mismatch.foo")).isNotNull();
+		assertThat(this.admin.getQueueProperties("mismatch.bar")).isNotNull();
 		context.close();
 	}
 

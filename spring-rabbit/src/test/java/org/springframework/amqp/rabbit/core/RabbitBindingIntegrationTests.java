@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,8 +16,7 @@
 
 package org.springframework.amqp.rabbit.core;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.After;
 import org.junit.Before;
@@ -70,7 +69,7 @@ public class RabbitBindingIntegrationTests {
 	}
 
 	@Test
-	public void testSendAndReceiveWithTopicSingleCallback() throws Exception {
+	public void testSendAndReceiveWithTopicSingleCallback() {
 
 		final RabbitAdmin admin = new RabbitAdmin(connectionFactory);
 		final TopicExchange exchange = new TopicExchange("topic");
@@ -82,19 +81,19 @@ public class RabbitBindingIntegrationTests {
 		template.execute(channel -> {
 
 			BlockingQueueConsumer consumer = createConsumer(template);
-			String tag = consumer.getConsumerTag();
-			assertNotNull(tag);
+			String tag = consumer.getConsumerTags().iterator().next();
+			assertThat(tag).isNotNull();
 
 			template.convertAndSend("foo", "message");
 
 			try {
 
 				String result = getResult(consumer);
-				assertEquals(null, result);
+				assertThat(result).isEqualTo(null);
 
 				template.convertAndSend("foo.end", "message");
 				result = getResult(consumer);
-				assertEquals("message", result);
+				assertThat(result).isEqualTo("message");
 
 			}
 			finally {
@@ -108,7 +107,7 @@ public class RabbitBindingIntegrationTests {
 	}
 
 	@Test
-	public void testSendAndReceiveWithNonDefaultExchange() throws Exception {
+	public void testSendAndReceiveWithNonDefaultExchange() {
 
 		final RabbitAdmin admin = new RabbitAdmin(connectionFactory);
 		final TopicExchange exchange = new TopicExchange("topic");
@@ -119,19 +118,19 @@ public class RabbitBindingIntegrationTests {
 		template.execute(channel -> {
 
 			BlockingQueueConsumer consumer = createConsumer(template);
-			String tag = consumer.getConsumerTag();
-			assertNotNull(tag);
+			String tag = consumer.getConsumerTags().iterator().next();
+			assertThat(tag).isNotNull();
 
 			template.convertAndSend("topic", "foo", "message");
 
 			try {
 
 				String result = getResult(consumer);
-				assertEquals(null, result);
+				assertThat(result).isEqualTo(null);
 
 				template.convertAndSend("topic", "foo.end", "message");
 				result = getResult(consumer);
-				assertEquals("message", result);
+				assertThat(result).isEqualTo("message");
 
 			}
 			finally {
@@ -163,8 +162,8 @@ public class RabbitBindingIntegrationTests {
 		BlockingQueueConsumer consumer = template.execute(channel -> {
 
 			BlockingQueueConsumer consumer1 = createConsumer(template);
-			String tag = consumer1.getConsumerTag();
-			assertNotNull(tag);
+			String tag = consumer1.getConsumerTags().iterator().next();
+			assertThat(tag).isNotNull();
 
 			return consumer1;
 
@@ -172,11 +171,11 @@ public class RabbitBindingIntegrationTests {
 
 		template.convertAndSend("foo", "message");
 		String result = getResult(consumer);
-		assertEquals(null, result);
+		assertThat(result).isEqualTo(null);
 
 		template.convertAndSend("foo.end", "message");
 		result = getResult(consumer);
-		assertEquals("message", result);
+		assertThat(result).isEqualTo("message");
 
 		consumer.stop();
 		admin.deleteExchange("topic");
@@ -185,7 +184,7 @@ public class RabbitBindingIntegrationTests {
 	}
 
 	@Test
-	public void testSendAndReceiveWithTopicTwoCallbacks() throws Exception {
+	public void testSendAndReceiveWithTopicTwoCallbacks() {
 
 		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
 		TopicExchange exchange = new TopicExchange("topic");
@@ -197,13 +196,13 @@ public class RabbitBindingIntegrationTests {
 		template.execute(channel -> {
 
 			BlockingQueueConsumer consumer = createConsumer(template);
-			String tag = consumer.getConsumerTag();
-			assertNotNull(tag);
+			String tag = consumer.getConsumerTags().iterator().next();
+			assertThat(tag).isNotNull();
 
 			try {
 				template.convertAndSend("foo", "message");
 				String result = getResult(consumer);
-				assertEquals(null, result);
+				assertThat(result).isEqualTo(null);
 			}
 			finally {
 				consumer.stop();
@@ -216,13 +215,13 @@ public class RabbitBindingIntegrationTests {
 		template.execute(channel -> {
 
 			BlockingQueueConsumer consumer = createConsumer(template);
-			String tag = consumer.getConsumerTag();
-			assertNotNull(tag);
+			String tag = consumer.getConsumerTags().iterator().next();
+			assertThat(tag).isNotNull();
 
 			try {
 				template.convertAndSend("foo.end", "message");
 				String result = getResult(consumer);
-				assertEquals("message", result);
+				assertThat(result).isEqualTo("message");
 			}
 			finally {
 				consumer.stop();
@@ -235,7 +234,7 @@ public class RabbitBindingIntegrationTests {
 	}
 
 	@Test
-	public void testSendAndReceiveWithFanout() throws Exception {
+	public void testSendAndReceiveWithFanout() {
 
 		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
 		FanoutExchange exchange = new FanoutExchange("fanout");
@@ -247,13 +246,13 @@ public class RabbitBindingIntegrationTests {
 		template.execute(channel -> {
 
 			BlockingQueueConsumer consumer = createConsumer(template);
-			String tag = consumer.getConsumerTag();
-			assertNotNull(tag);
+			String tag = consumer.getConsumerTags().iterator().next();
+			assertThat(tag).isNotNull();
 
 			try {
 				template.convertAndSend("message");
 				String result = getResult(consumer);
-				assertEquals("message", result);
+				assertThat(result).isEqualTo("message");
 			}
 			finally {
 				consumer.stop();
@@ -273,7 +272,7 @@ public class RabbitBindingIntegrationTests {
 		// wait for consumeOk...
 		int n = 0;
 		while (n++ < 100) {
-			if (consumer.getConsumerTag() == null) {
+			if (consumer.getConsumerTags().size() == 0) {
 				try {
 					Thread.sleep(100);
 				}

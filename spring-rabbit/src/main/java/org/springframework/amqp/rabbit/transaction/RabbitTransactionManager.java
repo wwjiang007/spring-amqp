@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,11 +17,9 @@
 package org.springframework.amqp.rabbit.transaction;
 
 import org.springframework.amqp.AmqpException;
-import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactoryUtils;
 import org.springframework.amqp.rabbit.connection.RabbitResourceHolder;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.InvalidIsolationLevelException;
@@ -31,8 +29,7 @@ import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.ResourceTransactionManager;
 import org.springframework.transaction.support.SmartTransactionObject;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-
-import com.rabbitmq.client.Connection;
+import org.springframework.util.Assert;
 
 /**
  * {@link org.springframework.transaction.PlatformTransactionManager} implementation for a single Rabbit
@@ -47,11 +44,14 @@ import com.rabbitmq.client.Connection;
  * <p>
  * Application code is required to retrieve the transactional Rabbit resources via
  * {@link ConnectionFactoryUtils#getTransactionalResourceHolder(ConnectionFactory, boolean)} instead of a standard
- * {@link Connection#createChannel()} call with subsequent Channel creation. Spring's {@link RabbitTemplate} will
+ * {@link org.springframework.amqp.rabbit.connection.Connection#createChannel(boolean)} call with subsequent
+ * Channel creation. Spring's
+ * {@link org.springframework.amqp.rabbit.core.RabbitTemplate} will
  * autodetect a thread-bound Channel and automatically participate in it.
  *
  * <p>
- * <b>The use of {@link CachingConnectionFactory} as a target for this transaction manager is strongly recommended.</b>
+ * <b>The use of {@link org.springframework.amqp.rabbit.connection.CachingConnectionFactory}
+ * as a target for this transaction manager is strongly recommended.</b>
  * CachingConnectionFactory uses a single Rabbit Connection for all Rabbit access in order to avoid the overhead of
  * repeated Connection creation, as well as maintaining a cache of Channels. Each transaction will then share the same
  * Rabbit Connection, while still using its own individual Rabbit Channel.
@@ -90,9 +90,8 @@ public class RabbitTransactionManager extends AbstractPlatformTransactionManager
 	 * @param connectionFactory the ConnectionFactory to use
 	 */
 	public RabbitTransactionManager(ConnectionFactory connectionFactory) {
-		this();
+		Assert.notNull(connectionFactory, "'connectionFactory' cannot be null");
 		this.connectionFactory = connectionFactory;
-		afterPropertiesSet();
 	}
 
 	/**
@@ -114,9 +113,7 @@ public class RabbitTransactionManager extends AbstractPlatformTransactionManager
 	 */
 	@Override
 	public void afterPropertiesSet() {
-		if (getConnectionFactory() == null) {
-			throw new IllegalArgumentException("Property 'connectionFactory' is required");
-		}
+		Assert.state(getConnectionFactory() != null, "Property 'connectionFactory' is required");
 	}
 
 	@Override

@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Set;
 
 import org.springframework.amqp.core.MessageProperties;
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
 
@@ -36,8 +37,7 @@ import com.fasterxml.jackson.databind.type.TypeFactory;
  * @author Artem Bilan
  * @author Gary Russell
  */
-public class DefaultJackson2JavaTypeMapper extends AbstractJavaTypeMapper
-		implements Jackson2JavaTypeMapper, ClassMapper {
+public class DefaultJackson2JavaTypeMapper extends AbstractJavaTypeMapper implements Jackson2JavaTypeMapper {
 
 	private static final List<String> TRUSTED_PACKAGES =
 			Arrays.asList(
@@ -90,7 +90,7 @@ public class DefaultJackson2JavaTypeMapper extends AbstractJavaTypeMapper
 	 * @param trustedPackages the trusted Java packages for deserialization
 	 * @since 1.6.11
 	 */
-	public void setTrustedPackages(String... trustedPackages) {
+	public void setTrustedPackages(@Nullable String... trustedPackages) {
 		if (trustedPackages != null) {
 			for (String whiteListClass : trustedPackages) {
 				if ("*".equals(whiteListClass)) {
@@ -105,41 +105,56 @@ public class DefaultJackson2JavaTypeMapper extends AbstractJavaTypeMapper
 	}
 
 	@Override
+	public void addTrustedPackages(@Nullable String... packages) {
+		setTrustedPackages(packages);
+	}
+
+	@Override
 	public JavaType toJavaType(MessageProperties properties) {
-		boolean hasInferredTypeHeader = hasInferredTypeHeader(properties);
-		if (hasInferredTypeHeader && this.typePrecedence.equals(TypePrecedence.INFERRED)) {
-			JavaType targetType = fromInferredTypeHeader(properties);
-			if ((!targetType.isAbstract() && !targetType.isInterface())
-					|| targetType.getRawClass().getPackage().getName().startsWith("java.util")) {
-				return targetType;
-			}
+		JavaType inferredType = getInferredType(properties);
+		if (inferredType != null
+			 && ((!inferredType.isAbstract() && !inferredType.isInterface()
+					|| inferredType.getRawClass().getPackage().getName().startsWith("java.util")))) {
+			return inferredType;
 		}
 
 		String typeIdHeader = retrieveHeaderAsString(properties, getClassIdFieldName());
 
 		if (typeIdHeader != null) {
-
-			JavaType classType = getClassIdType(typeIdHeader);
-			if (!classType.isContainerType() || classType.isArrayType()) {
-				return classType;
-			}
-
-			JavaType contentClassType = getClassIdType(retrieveHeader(properties, getContentClassIdFieldName()));
-			if (classType.getKeyType() == null) {
-				return TypeFactory.defaultInstance()
-						.constructCollectionLikeType(classType.getRawClass(), contentClassType);
-			}
-
-			JavaType keyClassType = getClassIdType(retrieveHeader(properties, getKeyClassIdFieldName()));
-			return TypeFactory.defaultInstance()
-					.constructMapLikeType(classType.getRawClass(), keyClassType, contentClassType);
+			return fromTypeHeader(properties, typeIdHeader);
 		}
 
-		if (hasInferredTypeHeader) {
+		if (hasInferredTypeHeader(properties)) {
 			return fromInferredTypeHeader(properties);
 		}
 
 		return TypeFactory.defaultInstance().constructType(Object.class);
+	}
+
+	private JavaType fromTypeHeader(MessageProperties properties, String typeIdHeader) {
+		JavaType classType = getClassIdType(typeIdHeader);
+		if (!classType.isContainerType() || classType.isArrayType()) {
+			return classType;
+		}
+
+		JavaType contentClassType = getClassIdType(retrieveHeader(properties, getContentClassIdFieldName()));
+		if (classType.getKeyType() == null) {
+			return TypeFactory.defaultInstance()
+					.constructCollectionLikeType(classType.getRawClass(), contentClassType);
+		}
+
+		JavaType keyClassType = getClassIdType(retrieveHeader(properties, getKeyClassIdFieldName()));
+		return TypeFactory.defaultInstance()
+				.constructMapLikeType(classType.getRawClass(), keyClassType, contentClassType);
+	}
+
+	@Override
+	@Nullable
+	public JavaType getInferredType(MessageProperties properties) {
+		if (hasInferredTypeHeader(properties) && this.typePrecedence.equals(TypePrecedence.INFERRED)) {
+			return fromInferredTypeHeader(properties);
+		}
+		return null;
 	}
 
 	private JavaType getClassIdType(String classId) {

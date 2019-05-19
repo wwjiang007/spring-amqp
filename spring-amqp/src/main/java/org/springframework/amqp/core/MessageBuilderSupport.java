@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2017 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,8 +25,11 @@ import org.springframework.beans.BeanUtils;
 /**
  * Support class for building {@link Message} and {@link MessageProperties}
  * fluent API.
+ *
  * @param <T> The message builder type.
+ *
  * @author Gary Russell
+ *
  * @since 1.3
  *
  */
@@ -81,18 +84,6 @@ public abstract class MessageBuilderSupport<T> {
 	}
 
 	public MessageBuilderSupport<T> setCorrelationId(String correlationId) {
-		this.properties.setCorrelationId(correlationId);
-		return this;
-	}
-
-	/**
-	 * Set the correlation id.
-	 * @param correlationId the id.
-	 * @return the builder.
-	 * @deprecated - use {@link #setCorrelationId(String)}
-	 */
-	@Deprecated
-	public MessageBuilderSupport<T> setCorrelationIdString(String correlationId) {
 		this.properties.setCorrelationId(correlationId);
 		return this;
 	}
@@ -216,20 +207,6 @@ public abstract class MessageBuilderSupport<T> {
 	}
 
 	public MessageBuilderSupport<T> setCorrelationIdIfAbsent(String correlationId) {
-		if (this.properties.getCorrelationId() == null) {
-			this.properties.setCorrelationId(correlationId);
-		}
-		return this;
-	}
-
-	/**
-	 * Set the correlation id if not already present.
-	 * @param correlationId the id.
-	 * @return the builder.
-	 * @deprecated - use {@link #setCorrelationIdIfAbsent(String)}
-	 */
-	@Deprecated
-	public MessageBuilderSupport<T> setCorrelationIdStringIfAbsent(String correlationId) {
 		if (this.properties.getCorrelationId() == null) {
 			this.properties.setCorrelationId(correlationId);
 		}
@@ -368,4 +345,5 @@ public abstract class MessageBuilderSupport<T> {
 	}
 
 	public abstract T build();
+
 }

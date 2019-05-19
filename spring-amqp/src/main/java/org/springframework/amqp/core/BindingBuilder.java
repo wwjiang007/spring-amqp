@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -58,8 +58,9 @@ public final class BindingBuilder {
 	 */
 	public static final class DestinationConfigurer {
 
-		protected final String name;
-		protected final DestinationType type;
+		protected final String name; // NOSONAR
+
+		protected final DestinationType type; // NOSONAR
 
 		DestinationConfigurer(String name, DestinationType type) {
 			this.name = name;
@@ -92,9 +93,9 @@ public final class BindingBuilder {
 	 */
 	public static final class HeadersExchangeMapConfigurer {
 
-		protected final DestinationConfigurer destination;
+		protected final DestinationConfigurer destination; // NOSONAR
 
-		protected final HeadersExchange exchange;
+		protected final HeadersExchange exchange; // NOSONAR
 
 		HeadersExchangeMapConfigurer(DestinationConfigurer destination, HeadersExchange exchange) {
 			this.destination = destination;
@@ -189,11 +190,11 @@ public final class BindingBuilder {
 		}
 	}
 
-	private abstract static class AbstractRoutingKeyConfigurer<E extends Exchange> {
+	private abstract static class AbstractRoutingKeyConfigurer {
 
-		protected final DestinationConfigurer destination;
+		protected final DestinationConfigurer destination; // NOSONAR
 
-		protected final String exchange;
+		protected final String exchange; // NOSONAR
 
 		AbstractRoutingKeyConfigurer(DestinationConfigurer destination, String exchange) {
 			this.destination = destination;
@@ -204,7 +205,7 @@ public final class BindingBuilder {
 	/**
 	 * Topic exchange routing key configurer.
 	 */
-	public static final class TopicExchangeRoutingKeyConfigurer extends AbstractRoutingKeyConfigurer<TopicExchange> {
+	public static final class TopicExchangeRoutingKeyConfigurer extends AbstractRoutingKeyConfigurer {
 
 		TopicExchangeRoutingKeyConfigurer(DestinationConfigurer destination, TopicExchange exchange) {
 			super(destination, exchange.getName());
@@ -224,7 +225,7 @@ public final class BindingBuilder {
 	/**
 	 * Generic exchange routing key configurer.
 	 */
-	public static final class GenericExchangeRoutingKeyConfigurer extends AbstractRoutingKeyConfigurer<TopicExchange> {
+	public static final class GenericExchangeRoutingKeyConfigurer extends AbstractRoutingKeyConfigurer {
 
 		GenericExchangeRoutingKeyConfigurer(DestinationConfigurer destination, Exchange exchange) {
 			super(destination, exchange.getName());
@@ -246,6 +247,7 @@ public final class BindingBuilder {
 	public static class GenericArgumentsConfigurer {
 
 		private final GenericExchangeRoutingKeyConfigurer configurer;
+
 		private final String routingKey;
 
 		public GenericArgumentsConfigurer(GenericExchangeRoutingKeyConfigurer configurer, String routingKey) {
@@ -268,7 +270,7 @@ public final class BindingBuilder {
 	/**
 	 * Direct exchange routing key configurer.
 	 */
-	public static final class DirectExchangeRoutingKeyConfigurer extends AbstractRoutingKeyConfigurer<DirectExchange> {
+	public static final class DirectExchangeRoutingKeyConfigurer extends AbstractRoutingKeyConfigurer {
 
 		DirectExchangeRoutingKeyConfigurer(DestinationConfigurer destination, DirectExchange exchange) {
 			super(destination, exchange.getName());

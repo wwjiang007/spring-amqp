@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-2017 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,7 +23,8 @@ import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Address;
 import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
-import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 
 import com.rabbitmq.client.Channel;
@@ -82,37 +83,31 @@ public class DirectReplyToMessageListenerContainer extends DirectMessageListener
 	}
 
 	@Override
-	public void setMessageListener(Object messageListener) {
-		throw new UnsupportedOperationException(
-				"'messageListener' must be a 'MessageListener' or 'ChannelAwareMessageListener'");
-	}
-
-	@Override
-	public void setChannelAwareMessageListener(ChannelAwareMessageListener messageListener) {
-		super.setChannelAwareMessageListener((message, channel) -> {
-			try {
-				messageListener.onMessage(message, channel);
-			}
-			finally {
-				this.inUseConsumerChannels.remove(channel);
-			}
-		});
-	}
-
-	@Override
 	public void setMessageListener(MessageListener messageListener) {
-		super.setChannelAwareMessageListener((message, channel) -> {
-			try {
-				messageListener.onMessage(message);
-			}
-			finally {
-				this.inUseConsumerChannels.remove(channel);
-			}
-		});
+		if (messageListener instanceof ChannelAwareMessageListener) {
+			super.setMessageListener((ChannelAwareMessageListener) (message, channel) -> {
+				try {
+					((ChannelAwareMessageListener) messageListener).onMessage(message, channel);
+				}
+				finally {
+					this.inUseConsumerChannels.remove(channel);
+				}
+			});
+		}
+		else {
+			super.setMessageListener((ChannelAwareMessageListener) (message, channel) -> {
+				try {
+					messageListener.onMessage(message);
+				}
+				finally {
+					this.inUseConsumerChannels.remove(channel);
+				}
+			});
+		}
 	}
 
 	@Override
-	protected void doStart() throws Exception {
+	protected void doStart() {
 		if (!isRunning()) {
 			this.consumerCount = 0;
 			super.setConsumersPerQueue(0);
@@ -136,6 +131,16 @@ public class DirectReplyToMessageListenerContainer extends DirectMessageListener
 				super.setConsumersPerQueue(this.consumerCount);
 			}
 		}
+	}
+
+	@Override
+	protected int findIdleConsumer() {
+		for (int i = 0; i < this.consumers.size(); i++) {
+			if (!this.inUseConsumerChannels.containsValue(this.consumers.get(i))) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	@Override
@@ -182,16 +187,14 @@ public class DirectReplyToMessageListenerContainer extends DirectMessageListener
 	 * @param cancelConsumer true to cancel the consumer.
 	 * @param message a message to be included in the cancel event if cancelConsumer is true.
 	 */
-	public void releaseConsumerFor(ChannelHolder channelHolder, boolean cancelConsumer, String message) {
+	public void releaseConsumerFor(ChannelHolder channelHolder, boolean cancelConsumer, @Nullable String message) {
 		synchronized (this.consumersMonitor) {
 			SimpleConsumer consumer = this.inUseConsumerChannels.get(channelHolder.getChannel());
-			if (consumer != null) {
-				if (consumer.getEpoch() == channelHolder.getConsumerEpoch()) {
-					this.inUseConsumerChannels.remove(channelHolder.getChannel());
-					if (cancelConsumer) {
-						Assert.isTrue(message != null, "A 'message' is required when 'cancelConsumer' is 'true'");
-						consumer.cancelConsumer("Consumer " + this + " canceled due to " + message);
-					}
+			if (consumer != null && consumer.getEpoch() == channelHolder.getConsumerEpoch()) {
+				this.inUseConsumerChannels.remove(channelHolder.getChannel());
+				if (cancelConsumer) {
+					Assert.isTrue(message != null, "A 'message' is required when 'cancelConsumer' is 'true'");
+					consumer.cancelConsumer("Consumer " + this + " canceled due to " + message);
 				}
 			}
 		}

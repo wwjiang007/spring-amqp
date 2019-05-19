@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2017 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,7 +21,6 @@ import java.net.URI;
 import java.util.Calendar;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Optional;
 import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -44,13 +43,15 @@ import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.connection.AbstractConnectionFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactoryConfigurationUtils;
 import org.springframework.amqp.rabbit.connection.RabbitConnectionFactoryBean;
 import org.springframework.amqp.rabbit.core.DeclareExchangeConnectionListener;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.support.LogAppenderUtils;
+import org.springframework.amqp.utils.JavaUtils;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.util.StringUtils;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.PatternLayout;
@@ -63,7 +64,7 @@ import ch.qos.logback.core.encoder.Encoder;
 import com.rabbitmq.client.ConnectionFactory;
 
 /**
- * A Lockback appender that publishes logging events to an AMQP Exchange.
+ * A Logback appender that publishes logging events to an AMQP Exchange.
  * <p>
  * A fully-configured AmqpAppender, with every option set to their defaults, would look like this:
  *
@@ -93,6 +94,8 @@ import com.rabbitmq.client.ConnectionFactory;
  * @since 1.4
  */
 public class AmqpAppender extends AppenderBase<ILoggingEvent> {
+
+	private static final int DEFAULT_MAX_SENDER_RETRIES = 30;
 
 	/**
 	 * Key name for the application id (if there is one set via the appender config) in the message properties.
@@ -164,7 +167,7 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 	/**
 	 * How many times to retry sending a message if the broker is unavailable or there is some other error.
 	 */
-	private int maxSenderRetries = 30;
+	private int maxSenderRetries = DEFAULT_MAX_SENDER_RETRIES;
 
 	/**
 	 * Retries are delayed like: N ^ log(N), where N is the retry number.
@@ -175,6 +178,11 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 	 * RabbitMQ ConnectionFactory.
 	 */
 	private AbstractConnectionFactory connectionFactory;
+
+	/**
+	 * A name for the connection (appears on the RabbitMQ Admin UI).
+	 */
+	private String connectionName;
 
 	/**
 	 * Additional client connection properties added to the rabbit connection, with the form
@@ -263,6 +271,8 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 	 * Truststore type.
 	 */
 	private String trustStoreType = "JKS";
+
+	private boolean verifyHostname = true;
 
 	/**
 	 * Default content-type of log messages.
@@ -371,6 +381,25 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 
 	public void setUseSsl(boolean ssl) {
 		this.useSsl = ssl;
+	}
+
+	/**
+	 * Enable server hostname verification for TLS connections.
+	 * @param enable false to disable.
+	 * @since 2.1.6
+	 * @see RabbitConnectionFactoryBean#setEnableHostnameVerification(boolean)
+	 */
+	public void setVerifyHostname(boolean enable) {
+		this.verifyHostname = enable;
+	}
+
+	/**
+	 * Return true (default) if TLS hostname verification is enabled.
+	 * @return true (default) if TLS hostname verification is enabled.
+	 * @since 2.1.6
+	 */
+	public boolean isVerifyHostname() {
+		return this.verifyHostname;
 	}
 
 	public String getSslAlgorithm() {
@@ -570,9 +599,17 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 	}
 
 	/**
+	 * Set a name for the connection which will appear on the RabbitMQ Admin UI.
+	 * @param connectionName the connection name.
+	 * @since 2.1.1
+	 */
+	public void setConnectionName(String connectionName) {
+		this.connectionName = connectionName;
+	}
+
+	/**
 	 * Set additional client connection properties to be added to the rabbit connection,
 	 * with the form {@code key:value[,key:value]...}.
-	 *
 	 * @param clientConnectionProperties the properties.
 	 * @since 1.5.6
 	 */
@@ -603,16 +640,20 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 		if (rabbitConnectionFactory != null) {
 			super.start();
 			this.routingKeyLayout.setPattern(this.routingKeyLayout.getPattern()
-					.replaceAll("%property\\{applicationId\\}", this.applicationId));
+					.replaceAll("%property\\{applicationId}", this.applicationId));
 			this.routingKeyLayout.setContext(getContext());
 			this.routingKeyLayout.start();
 			this.locationLayout.setContext(getContext());
 			this.locationLayout.start();
 			this.connectionFactory = new CachingConnectionFactory(rabbitConnectionFactory);
+			if (StringUtils.hasText(this.connectionName)) {
+				this.connectionFactory.setConnectionNameStrategy(cf -> this.connectionName);
+			}
 			if (this.addresses != null) {
 				this.connectionFactory.setAddresses(this.addresses);
 			}
-			LogAppenderUtils.updateClientConnectionProperties(this.connectionFactory, this.clientConnectionProperties);
+			ConnectionFactoryConfigurationUtils.updateClientConnectionProperties(this.connectionFactory,
+					this.clientConnectionProperties);
 			updateConnectionClientProperties(this.connectionFactory.getRabbitConnectionFactory().getClientProperties());
 			setUpExchangeDeclaration();
 			this.senderPool = Executors.newCachedThreadPool();
@@ -624,7 +665,6 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 
 	/**
 	 * Create the {@link ConnectionFactory}.
-	 *
 	 * @return a {@link ConnectionFactory}.
 	 */
 	protected ConnectionFactory createRabbitConnectionFactory() {
@@ -643,21 +683,21 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 	/**
 	 * Configure the {@link RabbitConnectionFactoryBean}. Sub-classes may override to
 	 * customize the configuration of the bean.
-	 *
 	 * @param factoryBean the {@link RabbitConnectionFactoryBean}.
 	 */
 	protected void configureRabbitConnectionFactory(RabbitConnectionFactoryBean factoryBean) {
-
-		Optional.ofNullable(this.host).ifPresent(factoryBean::setHost);
-		Optional.ofNullable(this.port).ifPresent(factoryBean::setPort);
-		Optional.ofNullable(this.username).ifPresent(factoryBean::setUsername);
-		Optional.ofNullable(this.password).ifPresent(factoryBean::setPassword);
-		Optional.ofNullable(this.virtualHost).ifPresent(factoryBean::setVirtualHost);
-		// overrides all preceding items when set
-		Optional.ofNullable(this.uri).ifPresent(factoryBean::setUri);
+		JavaUtils.INSTANCE
+				.acceptIfNotNull(this.host, factoryBean::setHost)
+				.acceptIfNotNull(this.port, factoryBean::setPort)
+				.acceptIfNotNull(this.username, factoryBean::setUsername)
+				.acceptIfNotNull(this.password, factoryBean::setPassword)
+				.acceptIfNotNull(this.virtualHost, factoryBean::setVirtualHost)
+				// overrides all preceding items when set
+				.acceptIfNotNull(this.uri, factoryBean::setUri);
 
 		if (this.useSsl) {
 			factoryBean.setUseSSL(true);
+			factoryBean.setEnableHostnameVerification(this.verifyHostname);
 			if (this.sslAlgorithm != null) {
 				factoryBean.setSslAlgorithm(this.sslAlgorithm);
 			}
@@ -687,7 +727,6 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 	/**
 	 * Subclasses can override this method to add properties to the connection client
 	 * properties.
-	 *
 	 * @param clientProperties the client properties.
 	 * @since 1.5.6
 	 */
@@ -696,7 +735,6 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 
 	/**
 	 * Subclasses can override this method to inject a custom queue implementation.
-	 *
 	 * @return the queue to use for queueing logging events before processing them.
 	 * @since 2.0.1
 	 */
@@ -752,13 +790,12 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 
 	/**
 	 * Subclasses may modify the final message before sending.
-	 *
 	 * @param message The message.
 	 * @param event The event.
 	 * @return The modified message.
 	 * @since 1.4
 	 */
-	public Message postProcessMessageBeforeSend(Message message, Event event) {
+	protected Message postProcessMessageBeforeSend(Message message, Event event) {
 		return message;
 	}
 
@@ -808,63 +845,76 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 								"location",
 								String.format("%s.%s()[%s]", location[0], location[1], location[2]));
 					}
-					byte[] msgBody;
 					String routingKey = AmqpAppender.this.routingKeyLayout.doLayout(logEvent);
 					// Set applicationId, if we're using one
 					if (AmqpAppender.this.applicationId != null) {
 						amqpProps.setAppId(AmqpAppender.this.applicationId);
 					}
 
-					if (AmqpAppender.this.encoder != null && AmqpAppender.this.headerWritten.compareAndSet(false, true)) {
-						byte[] header = AmqpAppender.this.encoder.headerBytes();
-						if (header != null && header.length > 0) {
-							rabbitTemplate.convertAndSend(AmqpAppender.this.exchangeName, routingKey, header, m -> {
-								if (AmqpAppender.this.applicationId != null) {
-									m.getMessageProperties().setAppId(AmqpAppender.this.applicationId);
-								}
-								return m;
-							});
-						}
-					}
+					sendOneEncoderPatternMessage(rabbitTemplate, routingKey);
 
-					if (AmqpAppender.this.abbreviator != null && logEvent instanceof LoggingEvent) {
-						((LoggingEvent) logEvent).setLoggerName(AmqpAppender.this.abbreviator.abbreviate(name));
-						msgBody = encodeMessage(logEvent);
-						((LoggingEvent) logEvent).setLoggerName(name);
-					}
-					else {
-						msgBody = encodeMessage(logEvent);
-					}
-
-					// Send a message
-					try {
-						Message message = new Message(msgBody, amqpProps);
-
-						message = postProcessMessageBeforeSend(message, event);
-						rabbitTemplate.send(AmqpAppender.this.exchangeName, routingKey, message);
-					}
-					catch (AmqpException e) {
-						int retries = event.incrementRetries();
-						if (retries < AmqpAppender.this.maxSenderRetries) {
-							// Schedule a retry based on the number of times I've tried to re-send this
-							AmqpAppender.this.retryTimer.schedule(new TimerTask() {
-
-								@Override
-								public void run() {
-									AmqpAppender.this.events.add(event);
-								}
-
-							}, (long) (Math.pow(retries, Math.log(retries)) * 1000));
-						}
-						else {
-							addError("Could not send log message " + logEvent.getMessage()
-									+ " after " + AmqpAppender.this.maxSenderRetries + " retries", e);
-						}
-					}
+					doSend(rabbitTemplate, event, logEvent, name, amqpProps, routingKey);
 				}
 			}
 			catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
+			}
+		}
+
+		private void sendOneEncoderPatternMessage(RabbitTemplate rabbitTemplate, String routingKey) {
+			/*
+			 * If the encoder provides its pattern, send it as an additional one-time message.
+			 */
+			if (AmqpAppender.this.encoder != null
+					&& AmqpAppender.this.headerWritten.compareAndSet(false, true)) {
+				byte[] header = AmqpAppender.this.encoder.headerBytes();
+				if (header != null && header.length > 0) {
+					rabbitTemplate.convertAndSend(AmqpAppender.this.exchangeName, routingKey, header, m -> {
+						if (AmqpAppender.this.applicationId != null) {
+							m.getMessageProperties().setAppId(AmqpAppender.this.applicationId);
+						}
+						return m;
+					});
+				}
+			}
+		}
+
+		private void doSend(RabbitTemplate rabbitTemplate, final Event event, ILoggingEvent logEvent, String name,
+				MessageProperties amqpProps, String routingKey) {
+			byte[] msgBody;
+			if (AmqpAppender.this.abbreviator != null && logEvent instanceof LoggingEvent) {
+				((LoggingEvent) logEvent).setLoggerName(AmqpAppender.this.abbreviator.abbreviate(name));
+				msgBody = encodeMessage(logEvent);
+				((LoggingEvent) logEvent).setLoggerName(name);
+			}
+			else {
+				msgBody = encodeMessage(logEvent);
+			}
+
+			// Send a message
+			try {
+				Message message = new Message(msgBody, amqpProps);
+
+				message = postProcessMessageBeforeSend(message, event);
+				rabbitTemplate.send(AmqpAppender.this.exchangeName, routingKey, message);
+			}
+			catch (AmqpException e) {
+				int retries = event.incrementRetries();
+				if (retries < AmqpAppender.this.maxSenderRetries) {
+					// Schedule a retry based on the number of times I've tried to re-send this
+					AmqpAppender.this.retryTimer.schedule(new TimerTask() {
+
+						@Override
+						public void run() {
+							AmqpAppender.this.events.add(event);
+						}
+
+					}, (long) (Math.pow(retries, Math.log(retries)) * 1000)); // NOSONAR magic #
+				}
+				else {
+					addError("Could not send log message " + logEvent.getMessage()
+							+ " after " + AmqpAppender.this.maxSenderRetries + " retries", e);
+				}
 			}
 		}
 
@@ -886,6 +936,7 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 				return msgBody.getBytes(); //NOSONAR (default charset)
 			}
 		}
+
 	}
 
 	/**

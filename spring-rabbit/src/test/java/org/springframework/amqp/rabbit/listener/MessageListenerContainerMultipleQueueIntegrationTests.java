@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,7 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -30,7 +28,6 @@ import org.apache.logging.log4j.Level;
 import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Queue;
@@ -61,9 +58,6 @@ public class MessageListenerContainerMultipleQueueIntegrationTests {
 	@Rule
 	public LogLevelAdjuster logLevels = new LogLevelAdjuster(Level.INFO, RabbitTemplate.class,
 			SimpleMessageListenerContainer.class, BlockingQueueConsumer.class);
-
-	@Rule
-	public ExpectedException exception = ExpectedException.none();
 
 	@After
 	public void tearDown() {
@@ -103,8 +97,8 @@ public class MessageListenerContainerMultipleQueueIntegrationTests {
 		messageConverter.setCreateMessageIds(true);
 		template.setMessageConverter(messageConverter);
 		for (int i = 0; i < messageCount; i++) {
-			template.convertAndSend(queue1.getName(), new Integer(i));
-			template.convertAndSend(queue2.getName(), new Integer(i));
+			template.convertAndSend(queue1.getName(), Integer.valueOf(i));
+			template.convertAndSend(queue2.getName(), Integer.valueOf(i));
 		}
 		final SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory);
 		final CountDownLatch latch = new CountDownLatch(messageCount * 2);
@@ -120,8 +114,8 @@ public class MessageListenerContainerMultipleQueueIntegrationTests {
 			int timeout = Math.min(1 + messageCount / concurrentConsumers, 30);
 			boolean waited = latch.await(timeout, TimeUnit.SECONDS);
 			logger.info("All messages recovered: " + waited);
-			assertEquals(concurrentConsumers, container.getActiveConsumerCount());
-			assertTrue("Timed out waiting for messages", waited);
+			assertThat(container.getActiveConsumerCount()).isEqualTo(concurrentConsumers);
+			assertThat(waited).as("Timed out waiting for messages").isTrue();
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -129,10 +123,10 @@ public class MessageListenerContainerMultipleQueueIntegrationTests {
 		}
 		finally {
 			container.shutdown();
-			assertEquals(0, container.getActiveConsumerCount());
+			assertThat(container.getActiveConsumerCount()).isEqualTo(0);
 		}
-		assertNull(template.receiveAndConvert(queue1.getName()));
-		assertNull(template.receiveAndConvert(queue2.getName()));
+		assertThat(template.receiveAndConvert(queue1.getName())).isNull();
+		assertThat(template.receiveAndConvert(queue2.getName())).isNull();
 
 		connectionFactory.destroy();
 	}

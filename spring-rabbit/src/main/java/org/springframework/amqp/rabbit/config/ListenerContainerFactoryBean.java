@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-2017 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,6 +22,7 @@ import java.util.concurrent.Executor;
 import org.aopalliance.aop.Advice;
 
 import org.springframework.amqp.core.AcknowledgeMode;
+import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
@@ -32,7 +33,7 @@ import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.support.MessagePropertiesConverter;
 import org.springframework.amqp.support.ConditionalExceptionLogger;
 import org.springframework.amqp.support.ConsumerTagStrategy;
-import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.amqp.utils.JavaUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.beans.factory.config.AbstractFactoryBean;
@@ -68,7 +69,7 @@ public class ListenerContainerFactoryBean extends AbstractFactoryBean<AbstractMe
 
 	private Type type = Type.simple;
 
-	private AbstractMessageListenerContainer container;
+	private AbstractMessageListenerContainer listenerContainer;
 
 	private ConnectionFactory connectionFactory;
 
@@ -82,11 +83,9 @@ public class ListenerContainerFactoryBean extends AbstractFactoryBean<AbstractMe
 
 	private Boolean exposeListenerChannel;
 
-	private Object messageListener;
+	private MessageListener messageListener;
 
 	private ErrorHandler errorHandler;
-
-	private MessageConverter messageConverter;
 
 	private Boolean deBatchingEnabled;
 
@@ -211,16 +210,12 @@ public class ListenerContainerFactoryBean extends AbstractFactoryBean<AbstractMe
 		this.exposeListenerChannel = exposeListenerChannel;
 	}
 
-	public void setMessageListener(Object messageListener) {
+	public void setMessageListener(MessageListener messageListener) {
 		this.messageListener = messageListener;
 	}
 
 	public void setErrorHandler(ErrorHandler errorHandler) {
 		this.errorHandler = errorHandler;
-	}
-
-	public void setMessageConverter(MessageConverter messageConverter) {
-		this.messageConverter = messageConverter;
 	}
 
 	public void setDeBatchingEnabled(boolean deBatchingEnabled) {
@@ -385,180 +380,120 @@ public class ListenerContainerFactoryBean extends AbstractFactoryBean<AbstractMe
 
 	@Override
 	public Class<?> getObjectType() {
-		return this.container == null ? AbstractMessageListenerContainer.class : this.container.getClass();
+		return this.listenerContainer == null ? AbstractMessageListenerContainer.class : this.listenerContainer
+				.getClass();
 	}
 
+	@SuppressWarnings("deprecation")
 	@Override
-	protected AbstractMessageListenerContainer createInstance() throws Exception {
-		if (this.container == null) {
+	protected AbstractMessageListenerContainer createInstance() { // NOSONAR complexity
+		if (this.listenerContainer == null) {
 			AbstractMessageListenerContainer container = createContainer();
-			if (this.applicationContext != null) {
-				container.setApplicationContext(this.applicationContext);
-			}
-			if (this.beanName != null) {
-				container.setBeanName(this.beanName);
-			}
-			if (this.applicationEventPublisher != null) {
-				container.setApplicationEventPublisher(this.applicationEventPublisher);
-			}
-			if (this.channelTransacted != null) {
-				container.setChannelTransacted(this.channelTransacted);
-			}
-			if (this.acknowledgeMode != null) {
-				container.setAcknowledgeMode(this.acknowledgeMode);
-			}
-			if (this.queueNames != null) {
-				container.setQueueNames(this.queueNames);
-			}
-			if (this.queues != null) {
-				container.setQueues(this.queues);
-			}
-			if (this.exposeListenerChannel != null) {
-				container.setExposeListenerChannel(this.exposeListenerChannel);
-			}
-			if (this.messageListener != null) {
-				container.setMessageListener(this.messageListener);
-			}
-			if (this.errorHandler != null) {
-				container.setErrorHandler(this.errorHandler);
-			}
-			if (this.messageConverter != null) {
-				container.setMessageConverter(this.messageConverter);
-			}
-			if (this.deBatchingEnabled != null) {
-				container.setDeBatchingEnabled(this.deBatchingEnabled);
-			}
-			if (this.adviceChain != null) {
-				container.setAdviceChain(this.adviceChain);
-			}
-			if (this.afterReceivePostProcessors != null) {
-				container.setAfterReceivePostProcessors(this.afterReceivePostProcessors);
-			}
-			if (this.autoStartup != null) {
-				container.setAutoStartup(this.autoStartup);
-			}
-			if (this.phase != null) {
-				container.setPhase(this.phase);
-			}
-			if (this.listenerId != null) {
-				container.setListenerId(this.listenerId);
-			}
-			if (this.consumerTagStrategy != null) {
-				container.setConsumerTagStrategy(this.consumerTagStrategy);
-			}
-			if (this.consumerArgs != null) {
-				container.setConsumerArguments(this.consumerArgs);
-			}
-			if (this.noLocal != null) {
-				container.setNoLocal(this.noLocal);
-			}
-			if (this.exclusive != null) {
-				container.setExclusive(this.exclusive);
-			}
-			if (this.defaultRequeueRejected != null) {
-				container.setDefaultRequeueRejected(this.defaultRequeueRejected);
-			}
-			if (this.prefetchCount != null) {
-				container.setPrefetchCount(this.prefetchCount);
-			}
-			if (this.shutdownTimeout != null) {
-				container.setShutdownTimeout(this.shutdownTimeout);
-			}
-			if (this.idleEventInterval != null) {
-				container.setIdleEventInterval(this.idleEventInterval);
-			}
-			if (this.transactionManager != null) {
-				container.setTransactionManager(this.transactionManager);
-			}
-			if (this.transactionAttribute != null) {
-				container.setTransactionAttribute(this.transactionAttribute);
-			}
-			if (this.taskExecutor != null) {
-				container.setTaskExecutor(this.taskExecutor);
-			}
-			if (this.recoveryInterval != null) {
-				container.setRecoveryInterval(this.recoveryInterval);
-			}
-			if (this.recoveryBackOff != null) {
-				container.setRecoveryBackOff(this.recoveryBackOff);
-			}
-			if (this.messagePropertiesConverter != null) {
-				container.setMessagePropertiesConverter(this.messagePropertiesConverter);
-			}
-			if (this.rabbitAdmin != null) {
-				container.setRabbitAdmin(this.rabbitAdmin);
-			}
-			if (this.missingQueuesFatal != null) {
-				container.setMissingQueuesFatal(this.missingQueuesFatal);
-			}
-			if (this.possibleAuthenticationFailureFatal != null) {
-				container.setPossibleAuthenticationFailureFatal(this.possibleAuthenticationFailureFatal);
-			}
-			if (this.mismatchedQueuesFatal != null) {
-				container.setMismatchedQueuesFatal(this.mismatchedQueuesFatal);
-			}
-			if (this.autoDeclare != null) {
-				container.setAutoDeclare(this.autoDeclare);
-			}
-			if (this.failedDeclarationRetryInterval != null) {
-				container.setFailedDeclarationRetryInterval(this.failedDeclarationRetryInterval);
-			}
-			if (this.exclusiveConsumerExceptionLogger != null) {
-				container.setExclusiveConsumerExceptionLogger(this.exclusiveConsumerExceptionLogger);
-			}
+			JavaUtils.INSTANCE
+					.acceptIfNotNull(this.applicationContext, container::setApplicationContext)
+					.acceptIfNotNull(this.beanName, container::setBeanName)
+					.acceptIfNotNull(this.applicationEventPublisher, container::setApplicationEventPublisher)
+					.acceptIfNotNull(this.channelTransacted, container::setChannelTransacted)
+					.acceptIfNotNull(this.acknowledgeMode, container::setAcknowledgeMode)
+					.acceptIfNotNull(this.queueNames, container::setQueueNames)
+					.acceptIfNotNull(this.queues, container::setQueues)
+					.acceptIfNotNull(this.exposeListenerChannel, container::setExposeListenerChannel)
+					.acceptIfNotNull(this.messageListener, container::setMessageListener)
+					.acceptIfNotNull(this.errorHandler, container::setErrorHandler)
+					.acceptIfNotNull(this.deBatchingEnabled, container::setDeBatchingEnabled)
+					.acceptIfNotNull(this.adviceChain, container::setAdviceChain)
+					.acceptIfNotNull(this.afterReceivePostProcessors, container::setAfterReceivePostProcessors)
+					.acceptIfNotNull(this.autoStartup, container::setAutoStartup)
+					.acceptIfNotNull(this.phase, container::setPhase)
+					.acceptIfNotNull(this.listenerId, container::setListenerId)
+					.acceptIfNotNull(this.consumerTagStrategy, container::setConsumerTagStrategy)
+					.acceptIfNotNull(this.consumerArgs, container::setConsumerArguments)
+					.acceptIfNotNull(this.noLocal, container::setNoLocal)
+					.acceptIfNotNull(this.exclusive, container::setExclusive)
+					.acceptIfNotNull(this.defaultRequeueRejected, container::setDefaultRequeueRejected)
+					.acceptIfNotNull(this.prefetchCount, container::setPrefetchCount)
+					.acceptIfNotNull(this.shutdownTimeout, container::setShutdownTimeout)
+					.acceptIfNotNull(this.idleEventInterval, container::setIdleEventInterval)
+					.acceptIfNotNull(this.transactionManager, container::setTransactionManager)
+					.acceptIfNotNull(this.transactionAttribute, container::setTransactionAttribute)
+					.acceptIfNotNull(this.taskExecutor, container::setTaskExecutor)
+					.acceptIfNotNull(this.recoveryInterval, container::setRecoveryInterval)
+					.acceptIfNotNull(this.recoveryBackOff, container::setRecoveryBackOff)
+					.acceptIfNotNull(this.messagePropertiesConverter, container::setMessagePropertiesConverter)
+					.acceptIfNotNull(this.rabbitAdmin, container::setAmqpAdmin)
+					.acceptIfNotNull(this.missingQueuesFatal, container::setMissingQueuesFatal)
+					.acceptIfNotNull(this.possibleAuthenticationFailureFatal,
+							container::setPossibleAuthenticationFailureFatal)
+					.acceptIfNotNull(this.mismatchedQueuesFatal, container::setMismatchedQueuesFatal)
+					.acceptIfNotNull(this.autoDeclare, container::setAutoDeclare)
+					.acceptIfNotNull(this.failedDeclarationRetryInterval, container::setFailedDeclarationRetryInterval)
+					.acceptIfNotNull(this.exclusiveConsumerExceptionLogger,
+							container::setExclusiveConsumerExceptionLogger);
 			container.afterPropertiesSet();
-			this.container = container;
+			this.listenerContainer = container;
 		}
-		return this.container;
+		return this.listenerContainer;
 	}
 
 	private AbstractMessageListenerContainer createContainer() {
 		if (this.type.equals(Type.simple)) {
 			SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(this.connectionFactory);
-			if (this.concurrentConsumers != null) {
-				container.setConcurrentConsumers(this.concurrentConsumers);
-			}
-			if (this.maxConcurrentConsumers != null) {
-				container.setMaxConcurrentConsumers(this.maxConcurrentConsumers);
-			}
-			if (this.startConsumerMinInterval != null) {
-				container.setStartConsumerMinInterval(this.startConsumerMinInterval);
-			}
-			if (this.stopConsumerMinInterval != null) {
-				container.setStopConsumerMinInterval(this.stopConsumerMinInterval);
-			}
-			if (this.consecutiveActiveTrigger != null) {
-				container.setConsecutiveActiveTrigger(this.consecutiveActiveTrigger);
-			}
-			if (this.consecutiveIdleTrigger != null) {
-				container.setConsecutiveIdleTrigger(this.consecutiveIdleTrigger);
-			}
-			if (this.receiveTimeout != null) {
-				container.setReceiveTimeout(this.receiveTimeout);
-			}
-			if (this.txSize != null) {
-				container.setTxSize(this.txSize);
-			}
-			if (this.declarationRetries != null) {
-				container.setDeclarationRetries(this.declarationRetries);
-			}
-			if (this.retryDeclarationInterval != null) {
-				container.setRetryDeclarationInterval(this.retryDeclarationInterval);
-			}
+			JavaUtils.INSTANCE
+					.acceptIfNotNull(this.concurrentConsumers, container::setConcurrentConsumers)
+					.acceptIfNotNull(this.maxConcurrentConsumers, container::setMaxConcurrentConsumers)
+					.acceptIfNotNull(this.startConsumerMinInterval, container::setStartConsumerMinInterval)
+					.acceptIfNotNull(this.stopConsumerMinInterval, container::setStopConsumerMinInterval)
+					.acceptIfNotNull(this.consecutiveActiveTrigger, container::setConsecutiveActiveTrigger)
+					.acceptIfNotNull(this.consecutiveIdleTrigger, container::setConsecutiveIdleTrigger)
+					.acceptIfNotNull(this.receiveTimeout, container::setReceiveTimeout)
+					.acceptIfNotNull(this.txSize, container::setTxSize)
+					.acceptIfNotNull(this.declarationRetries, container::setDeclarationRetries)
+					.acceptIfNotNull(this.retryDeclarationInterval, container::setRetryDeclarationInterval);
 			return container;
 		}
 		else {
 			DirectMessageListenerContainer container = new DirectMessageListenerContainer(this.connectionFactory);
-			if (this.consumersPerQueue != null) {
-				container.setConsumersPerQueue(this.consumersPerQueue);
-			}
-			if (this.taskScheduler != null) {
-				container.setTaskScheduler(this.taskScheduler);
-			}
-			if (this.monitorInterval != null) {
-				container.setMonitorInterval(this.monitorInterval);
-			}
+			JavaUtils.INSTANCE
+					.acceptIfNotNull(this.consumersPerQueue, container::setConsumersPerQueue)
+					.acceptIfNotNull(this.taskScheduler, container::setTaskScheduler)
+					.acceptIfNotNull(this.monitorInterval, container::setMonitorInterval);
 			return container;
+		}
+	}
+
+	@Override
+	public void start() {
+		if (this.listenerContainer != null) {
+			this.listenerContainer.start();
+		}
+	}
+
+	@Override
+	public void stop() {
+		if (this.listenerContainer != null) {
+			this.listenerContainer.stop();
+		}
+	}
+
+	@Override
+	public boolean isRunning() {
+		return this.listenerContainer != null && this.listenerContainer.isRunning();
+	}
+
+	@Override
+	public int getPhase() {
+		return (this.listenerContainer != null) ? this.listenerContainer.getPhase() : 0;
+	}
+
+	@Override
+	public boolean isAutoStartup() {
+		return this.listenerContainer != null && this.listenerContainer.isAutoStartup();
+	}
+
+	@Override
+	public void stop(Runnable callback) {
+		if (this.listenerContainer != null) {
+			this.listenerContainer.stop(callback);
 		}
 	}
 
@@ -577,42 +512,6 @@ public class ListenerContainerFactoryBean extends AbstractFactoryBean<AbstractMe
 		 */
 		direct
 
-	}
-
-	@Override
-	public void start() {
-		if (this.container != null) {
-			this.container.start();
-		}
-	}
-
-	@Override
-	public void stop() {
-		if (this.container != null) {
-			this.container.stop();
-		}
-	}
-
-	@Override
-	public boolean isRunning() {
-		return this.container != null && this.container.isRunning();
-	}
-
-	@Override
-	public int getPhase() {
-		return (this.container != null) ? this.container.getPhase() : 0;
-	}
-
-	@Override
-	public boolean isAutoStartup() {
-		return this.container != null && this.container.isAutoStartup();
-	}
-
-	@Override
-	public void stop(Runnable callback) {
-		if (this.container != null) {
-			this.container.stop(callback);
-		}
 	}
 
 }

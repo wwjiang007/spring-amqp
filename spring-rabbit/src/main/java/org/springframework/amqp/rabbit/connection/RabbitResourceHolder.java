@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,17 +27,16 @@ import org.apache.commons.logging.LogFactory;
 
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.AmqpIOException;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.transaction.RabbitTransactionManager;
+import org.springframework.lang.Nullable;
 import org.springframework.transaction.support.ResourceHolderSupport;
 import org.springframework.util.Assert;
-import org.springframework.util.CollectionUtils;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
 import com.rabbitmq.client.Channel;
 /**
- * Rabbit resource holder, wrapping a RabbitMQ Connection and Channel. RabbitTransactionManager binds instances of this
+ * Rabbit resource holder, wrapping a RabbitMQ Connection and Channel.
+ * RabbitTransactionManager binds instances of this
  * class to the thread, for a given Rabbit ConnectionFactory.
  *
  * <p>
@@ -47,22 +46,20 @@ import com.rabbitmq.client.Channel;
  * @author Dave Syer
  * @author Gary Russell
  *
- * @see RabbitTransactionManager
- * @see RabbitTemplate
+ * @see org.springframework.amqp.rabbit.transaction.RabbitTransactionManager
+ * @see org.springframework.amqp.rabbit.core.RabbitTemplate
  */
 public class RabbitResourceHolder extends ResourceHolderSupport {
 
-	private static final Log logger = LogFactory.getLog(RabbitResourceHolder.class);
+	private static final Log logger = LogFactory.getLog(RabbitResourceHolder.class); // NOSONAR - lower case
 
-	private final boolean frozen = false;
+	private final List<Connection> connections = new LinkedList<>();
 
-	private final List<Connection> connections = new LinkedList<Connection>();
+	private final List<Channel> channels = new LinkedList<>();
 
-	private final List<Channel> channels = new LinkedList<Channel>();
+	private final Map<Connection, List<Channel>> channelsPerConnection = new HashMap<>();
 
-	private final Map<Connection, List<Channel>> channelsPerConnection = new HashMap<Connection, List<Channel>>();
-
-	private final MultiValueMap<Channel, Long> deliveryTags = new LinkedMultiValueMap<Channel, Long>();
+	private final MultiValueMap<Channel, Long> deliveryTags = new LinkedMultiValueMap<>();
 
 	private final boolean releaseAfterCompletion;
 
@@ -83,10 +80,6 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 	public RabbitResourceHolder(Channel channel, boolean releaseAfterCompletion) {
 		addChannel(channel);
 		this.releaseAfterCompletion = releaseAfterCompletion;
-	}
-
-	public final boolean isFrozen() {
-		return this.frozen;
 	}
 
 	/**
@@ -110,7 +103,6 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 	}
 
 	public final void addConnection(Connection connection) {
-		Assert.isTrue(!this.frozen, "Cannot add Connection because RabbitResourceHolder is frozen");
 		Assert.notNull(connection, "Connection must not be null");
 		if (!this.connections.contains(connection)) {
 			this.connections.add(connection);
@@ -121,18 +113,17 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 		addChannel(channel, null);
 	}
 
-	public final void addChannel(Channel channel, Connection connection) {
-		Assert.isTrue(!this.frozen, "Cannot add Channel because RabbitResourceHolder is frozen");
+	public final void addChannel(Channel channel, @Nullable Connection connection) {
 		Assert.notNull(channel, "Channel must not be null");
 		if (!this.channels.contains(channel)) {
 			this.channels.add(channel);
 			if (connection != null) {
-				List<Channel> channels = this.channelsPerConnection.get(connection);
-				if (channels == null) {
-					channels = new LinkedList<Channel>();
-					this.channelsPerConnection.put(connection, channels);
+				List<Channel> channelsForConnection = this.channelsPerConnection.get(connection);
+				if (channelsForConnection == null) {
+					channelsForConnection = new LinkedList<Channel>();
+					this.channelsPerConnection.put(connection, channelsForConnection);
 				}
-				channels.add(channel);
+				channelsForConnection.add(channel);
 			}
 		}
 	}
@@ -141,14 +132,12 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 		return this.channels.contains(channel);
 	}
 
+	@Nullable
 	public Connection getConnection() {
 		return (!this.connections.isEmpty() ? this.connections.get(0) : null);
 	}
 
-	public Connection getConnection(Class<? extends Connection> connectionType) {
-		return CollectionUtils.findValueOfType(this.connections, connectionType);
-	}
-
+	@Nullable
 	public Channel getChannel() {
 		return (!this.channels.isEmpty() ? this.channels.get(0) : null);
 	}
@@ -216,16 +205,6 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 				RabbitUtils.commitIfNecessary(channel);
 			}
 		}
-	}
-
-	/**
-	 * Invalid - always returned false.
-	 * @return true if the channels in this holder are transactional
-	 * @deprecated Not used
-	 */
-	@Deprecated
-	public boolean isChannelTransactional() {
-		return false;
 	}
 
 }

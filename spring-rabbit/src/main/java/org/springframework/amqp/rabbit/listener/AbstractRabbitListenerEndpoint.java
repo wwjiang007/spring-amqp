@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2017 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,10 +22,12 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.springframework.amqp.core.AcknowledgeMode;
+import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.core.Queue;
-import org.springframework.amqp.rabbit.config.SimpleRabbitListenerEndpoint;
-import org.springframework.amqp.rabbit.core.RabbitAdmin;
+import org.springframework.amqp.rabbit.batch.BatchingStrategy;
+import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.BeanFactoryAware;
@@ -33,7 +35,9 @@ import org.springframework.beans.factory.config.BeanExpressionContext;
 import org.springframework.beans.factory.config.BeanExpressionResolver;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.expression.BeanFactoryResolver;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.expression.BeanResolver;
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 
 /**
@@ -41,17 +45,20 @@ import org.springframework.util.Assert;
  *
  * @author Stephane Nicoll
  * @author Gary Russell
+ * @author Artem Bilan
+ *
  * @since 1.4
+ *
  * @see MethodRabbitListenerEndpoint
- * @see SimpleRabbitListenerEndpoint
+ * @see org.springframework.amqp.rabbit.config.SimpleRabbitListenerEndpoint
  */
 public abstract class AbstractRabbitListenerEndpoint implements RabbitListenerEndpoint, BeanFactoryAware {
 
 	private String id;
 
-	private final Collection<Queue> queues = new ArrayList<Queue>();
+	private final Collection<Queue> queues = new ArrayList<>();
 
-	private final Collection<String> queueNames = new ArrayList<String>();
+	private final Collection<String> queueNames = new ArrayList<>();
 
 	private boolean exclusive;
 
@@ -59,7 +66,7 @@ public abstract class AbstractRabbitListenerEndpoint implements RabbitListenerEn
 
 	private String concurrency;
 
-	private RabbitAdmin admin;
+	private AmqpAdmin admin;
 
 	private BeanFactory beanFactory;
 
@@ -73,6 +80,16 @@ public abstract class AbstractRabbitListenerEndpoint implements RabbitListenerEn
 
 	private Boolean autoStartup;
 
+	private MessageConverter messageConverter;
+
+	private TaskExecutor taskExecutor;
+
+	private boolean batchListener;
+
+	private BatchingStrategy batchingStrategy;
+
+	private AcknowledgeMode ackMode;
+
 	@Override
 	public void setBeanFactory(BeanFactory beanFactory) throws BeansException {
 		this.beanFactory = beanFactory;
@@ -83,6 +100,7 @@ public abstract class AbstractRabbitListenerEndpoint implements RabbitListenerEn
 		this.beanResolver = new BeanFactoryResolver(beanFactory);
 	}
 
+	@Nullable
 	protected BeanFactory getBeanFactory() {
 		return this.beanFactory;
 	}
@@ -201,18 +219,18 @@ public abstract class AbstractRabbitListenerEndpoint implements RabbitListenerEn
 	}
 
 	/**
-	 * Set the {@link RabbitAdmin} instance to use.
-	 * @param admin the {@link RabbitAdmin} instance.
+	 * Set the {@link AmqpAdmin} instance to use.
+	 * @param admin the {@link AmqpAdmin} instance.
 	 */
-	public void setAdmin(RabbitAdmin admin) {
+	public void setAdmin(AmqpAdmin admin) {
 		this.admin = admin;
 	}
 
 	/**
-	 * @return the {@link RabbitAdmin} instance to use or {@code null} if
+	 * @return the {@link AmqpAdmin} instance to use or {@code null} if
 	 * none is configured.
 	 */
-	public RabbitAdmin getAdmin() {
+	public AmqpAdmin getAdmin() {
 		return this.admin;
 	}
 
@@ -246,6 +264,65 @@ public abstract class AbstractRabbitListenerEndpoint implements RabbitListenerEn
 	}
 
 	@Override
+	public MessageConverter getMessageConverter() {
+		return this.messageConverter;
+	}
+
+	@Override
+	public void setMessageConverter(MessageConverter messageConverter) {
+		this.messageConverter = messageConverter;
+	}
+
+	@Override
+	public TaskExecutor getTaskExecutor() {
+		return this.taskExecutor;
+	}
+
+	/**
+	 * Override the default task executor.
+	 * @param taskExecutor the executor.
+	 * @since 2.2
+	 */
+	public void setTaskExecutor(TaskExecutor taskExecutor) {
+		this.taskExecutor = taskExecutor;
+	}
+
+	public boolean isBatchListener() {
+		return this.batchListener;
+	}
+
+	/**
+	 * Set to true if this endpoint should create a batch listener.
+	 * @param batchListener true for a batch listener.
+	 * @since 2.2
+	 * @see #setBatchingStrategy(BatchingStrategy)
+	 */
+	@Override
+	public void setBatchListener(boolean batchListener) {
+		this.batchListener = batchListener;
+	}
+
+	@Nullable
+	public BatchingStrategy getBatchingStrategy() {
+		return this.batchingStrategy;
+	}
+
+	@Override
+	public void setBatchingStrategy(BatchingStrategy batchingStrategy) {
+		this.batchingStrategy = batchingStrategy;
+	}
+
+	@Override
+	@Nullable
+	public AcknowledgeMode getAckMode() {
+		return this.ackMode;
+	}
+
+	public void setAckMode(AcknowledgeMode ackMode) {
+		this.ackMode = ackMode;
+	}
+
+	@Override
 	public void setupListenerContainer(MessageListenerContainer listenerContainer) {
 		AbstractMessageListenerContainer container = (AbstractMessageListenerContainer) listenerContainer;
 
@@ -271,7 +348,7 @@ public abstract class AbstractRabbitListenerEndpoint implements RabbitListenerEn
 		}
 
 		if (getAdmin() != null) {
-			container.setRabbitAdmin(getAdmin());
+			container.setAmqpAdmin(getAdmin());
 		}
 		setupMessageListener(listenerContainer);
 	}

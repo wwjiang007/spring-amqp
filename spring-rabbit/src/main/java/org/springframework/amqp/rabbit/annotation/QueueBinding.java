@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-2017 the original author or authors.
+ * Copyright 2015-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -60,5 +60,19 @@ public @interface QueueBinding {
 	 * @since 1.6
 	 */
 	Argument[] arguments() default {};
+
+	/**
+	 * @return true if the admin(s), if present, should declare this component.
+	 * @since 2.1
+	 */
+	String declare() default "true";
+
+	/**
+	 * Return a list of admin bean names that should declare this component.
+	 * By default all admins will declare it
+	 * @return the bean names
+	 * @since 2.1
+	 */
+	String[] admins() default {};
 
 }

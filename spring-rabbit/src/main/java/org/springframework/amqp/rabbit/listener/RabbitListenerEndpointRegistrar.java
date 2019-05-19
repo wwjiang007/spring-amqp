@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2016 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,7 +22,7 @@ import java.util.List;
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.BeanFactoryAware;
 import org.springframework.beans.factory.InitializingBean;
-import org.springframework.messaging.handler.annotation.support.DefaultMessageHandlerMethodFactory;
+import org.springframework.lang.Nullable;
 import org.springframework.messaging.handler.annotation.support.MessageHandlerMethodFactory;
 import org.springframework.util.Assert;
 
@@ -41,6 +41,7 @@ public class RabbitListenerEndpointRegistrar implements BeanFactoryAware, Initia
 	private final List<AmqpListenerEndpointDescriptor> endpointDescriptors =
 			new ArrayList<AmqpListenerEndpointDescriptor>();
 
+	@Nullable
 	private RabbitListenerEndpointRegistry endpointRegistry;
 
 	private MessageHandlerMethodFactory messageHandlerMethodFactory;
@@ -65,6 +66,7 @@ public class RabbitListenerEndpointRegistrar implements BeanFactoryAware, Initia
 	 * @return the {@link RabbitListenerEndpointRegistry} instance for this
 	 * registrar, may be {@code null}.
 	 */
+	@Nullable
 	public RabbitListenerEndpointRegistry getEndpointRegistry() {
 		return this.endpointRegistry;
 	}
@@ -72,10 +74,13 @@ public class RabbitListenerEndpointRegistrar implements BeanFactoryAware, Initia
 	/**
 	 * Set the {@link MessageHandlerMethodFactory} to use to configure the message
 	 * listener responsible to serve an endpoint detected by this processor.
-	 * <p>By default, {@link DefaultMessageHandlerMethodFactory} is used and it
-	 * can be configured further to support additional method arguments
-	 * or to customize conversion and validation support. See
-	 * {@link DefaultMessageHandlerMethodFactory} javadoc for more details.
+	 * <p>
+	 * By default,
+	 * {@link org.springframework.messaging.handler.annotation.support.DefaultMessageHandlerMethodFactory}
+	 * is used and it can be configured further to support additional method arguments or
+	 * to customize conversion and validation support. See
+	 * {@link org.springframework.messaging.handler.annotation.support.DefaultMessageHandlerMethodFactory}
+	 * javadoc for more details.
 	 * @param rabbitHandlerMethodFactory the {@link MessageHandlerMethodFactory} instance.
 	 */
 	public void setMessageHandlerMethodFactory(MessageHandlerMethodFactory rabbitHandlerMethodFactory) {
@@ -129,9 +134,10 @@ public class RabbitListenerEndpointRegistrar implements BeanFactoryAware, Initia
 	}
 
 	protected void registerAllEndpoints() {
+		Assert.state(this.endpointRegistry != null, "No registry available");
 		synchronized (this.endpointDescriptors) {
 			for (AmqpListenerEndpointDescriptor descriptor : this.endpointDescriptors) {
-				this.endpointRegistry.registerListenerContainer(
+				this.endpointRegistry.registerListenerContainer(// NOSONAR never null
 						descriptor.endpoint, resolveContainerFactory(descriptor));
 			}
 			this.startImmediately = true;  // trigger immediate startup
@@ -166,14 +172,16 @@ public class RabbitListenerEndpointRegistrar implements BeanFactoryAware, Initia
 	 * @param endpoint the {@link RabbitListenerEndpoint} instance to register.
 	 * @param factory the {@link RabbitListenerContainerFactory} to use.
 	 */
-	public void registerEndpoint(RabbitListenerEndpoint endpoint, RabbitListenerContainerFactory<?> factory) {
+	public void registerEndpoint(RabbitListenerEndpoint endpoint,
+			@Nullable RabbitListenerContainerFactory<?> factory) {
 		Assert.notNull(endpoint, "Endpoint must be set");
 		Assert.hasText(endpoint.getId(), "Endpoint id must be set");
+		Assert.state(!this.startImmediately || this.endpointRegistry != null, "No registry available");
 		// Factory may be null, we defer the resolution right before actually creating the container
 		AmqpListenerEndpointDescriptor descriptor = new AmqpListenerEndpointDescriptor(endpoint, factory);
 		synchronized (this.endpointDescriptors) {
 			if (this.startImmediately) { // Register and start immediately
-				this.endpointRegistry.registerListenerContainer(descriptor.endpoint,
+				this.endpointRegistry.registerListenerContainer(descriptor.endpoint, // NOSONAR never null
 						resolveContainerFactory(descriptor), true);
 			}
 			else {
@@ -201,7 +209,7 @@ public class RabbitListenerEndpointRegistrar implements BeanFactoryAware, Initia
 		private final RabbitListenerContainerFactory<?> containerFactory;
 
 		AmqpListenerEndpointDescriptor(RabbitListenerEndpoint endpoint,
-				RabbitListenerContainerFactory<?> containerFactory) {
+				@Nullable RabbitListenerContainerFactory<?> containerFactory) {
 			this.endpoint = endpoint;
 			this.containerFactory = containerFactory;
 		}

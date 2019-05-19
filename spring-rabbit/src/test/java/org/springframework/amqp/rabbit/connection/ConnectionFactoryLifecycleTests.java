@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-2017 the original author or authors.
+ * Copyright 2015-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,16 +16,9 @@
 
 package org.springframework.amqp.rabbit.connection;
 
-import static org.hamcrest.Matchers.containsString;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
-import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -69,14 +62,14 @@ public class ConnectionFactoryLifecycleTests {
 		MyLifecycle myLifecycle = context.getBean(MyLifecycle.class);
 		CachingConnectionFactory cf = context.getBean(CachingConnectionFactory.class);
 		context.close();
-		assertFalse(myLifecycle.isRunning());
-		assertTrue(TestUtils.getPropertyValue(cf, "stopped", Boolean.class));
+		assertThat(myLifecycle.isRunning()).isFalse();
+		assertThat(TestUtils.getPropertyValue(cf, "stopped", Boolean.class)).isTrue();
 		try {
 			cf.createConnection();
 			fail("Expected exception");
 		}
 		catch (AmqpApplicationContextClosedException e) {
-			assertThat(e.getMessage(), containsString("The ApplicationContext is closed"));
+			assertThat(e.getMessage()).contains("The ApplicationContext is closed");
 		}
 	}
 
@@ -100,12 +93,12 @@ public class ConnectionFactoryLifecycleTests {
 		connection.addBlockedListener(new BlockedListener() {
 
 			@Override
-			public void handleBlocked(String reason) throws IOException {
+			public void handleBlocked(String reason) {
 				blockedConnectionLatch.countDown();
 			}
 
 			@Override
-			public void handleUnblocked() throws IOException {
+			public void handleUnblocked() {
 				unblockedConnectionLatch.countDown();
 			}
 
@@ -114,20 +107,21 @@ public class ConnectionFactoryLifecycleTests {
 		AMQConnection amqConnection = TestUtils.getPropertyValue(connection, "target.delegate", AMQConnection.class);
 		amqConnection.processControlCommand(new AMQCommand(new AMQImpl.Connection.Blocked("Test connection blocked")));
 
-		assertTrue(blockedConnectionLatch.await(10, TimeUnit.SECONDS));
+		assertThat(blockedConnectionLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		ConnectionBlockedEvent connectionBlockedEvent = blockedConnectionEvent.get();
-		assertNotNull(connectionBlockedEvent);
-		assertEquals("Test connection blocked", connectionBlockedEvent.getReason());
-		assertSame(TestUtils.getPropertyValue(connection, "target"), connectionBlockedEvent.getConnection());
+		assertThat(connectionBlockedEvent).isNotNull();
+		assertThat(connectionBlockedEvent.getReason()).isEqualTo("Test connection blocked");
+		assertThat(connectionBlockedEvent.getConnection()).isSameAs(TestUtils.getPropertyValue(connection, "target"));
 
 		amqConnection.processControlCommand(new AMQCommand(new AMQImpl.Connection.Unblocked()));
 
-		assertTrue(unblockedConnectionLatch.await(10, TimeUnit.SECONDS));
+		assertThat(unblockedConnectionLatch.await(10, TimeUnit.SECONDS)).isTrue();
 
 		ConnectionUnblockedEvent connectionUnblockedEvent = unblockedConnectionEvent.get();
-		assertNotNull(connectionUnblockedEvent);
-		assertSame(TestUtils.getPropertyValue(connection, "target"), connectionUnblockedEvent.getConnection());
+		assertThat(connectionUnblockedEvent).isNotNull();
+		assertThat(connectionUnblockedEvent.getConnection()).isSameAs(TestUtils.getPropertyValue(connection, "target"));
+		context.close();
 	}
 
 	@Configuration

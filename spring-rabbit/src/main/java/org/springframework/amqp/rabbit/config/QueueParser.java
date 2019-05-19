@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -79,7 +79,7 @@ public class QueueParser extends AbstractSingleBeanDefinitionParser {
 	}
 
 	@Override
-	protected void doParse(Element element, ParserContext parserContext, BeanDefinitionBuilder builder) {
+	protected void doParse(Element element, ParserContext parserContext, BeanDefinitionBuilder builder) { // NOSONAR complexity
 
 		if (!NamespaceUtils.isAttributeDefined(element, NAME_ATTRIBUTE)
 				&& !NamespaceUtils.isAttributeDefined(element, ID_ATTRIBUTE)) {
@@ -112,6 +112,13 @@ public class QueueParser extends AbstractSingleBeanDefinitionParser {
 
 		}
 
+		parseArguments(element, parserContext, builder);
+
+		NamespaceUtils.parseDeclarationControls(element, builder);
+		CURRENT_ELEMENT.set(element);
+	}
+
+	private void parseArguments(Element element, ParserContext parserContext, BeanDefinitionBuilder builder) {
 		String queueArguments = element.getAttribute(ARGUMENTS);
 		Element argumentsElement = DomUtils.getChildElementByTagName(element, ARGUMENTS);
 
@@ -141,9 +148,6 @@ public class QueueParser extends AbstractSingleBeanDefinitionParser {
 		if (StringUtils.hasText(queueArguments)) {
 			builder.addConstructorArgReference(queueArguments);
 		}
-
-		NamespaceUtils.parseDeclarationControls(element, builder);
-		CURRENT_ELEMENT.set(element);
 	}
 
 	private boolean attributeHasIllegalOverride(Element element, String name, String allowed) {

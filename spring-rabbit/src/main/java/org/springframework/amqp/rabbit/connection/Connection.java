@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +17,7 @@
 package org.springframework.amqp.rabbit.connection;
 
 import org.springframework.amqp.AmqpException;
+import org.springframework.lang.Nullable;
 
 import com.rabbitmq.client.BlockedListener;
 import com.rabbitmq.client.Channel;
@@ -26,7 +27,7 @@ import com.rabbitmq.client.Channel;
  * @author Gary Russell
  * @author Artem Bilan
  */
-public interface Connection {
+public interface Connection extends AutoCloseable {
 
 	/**
 	 * Create a new channel, using an internally allocated channel number.
@@ -45,6 +46,7 @@ public interface Connection {
 	 *
 	 * @throws AmqpException if an I/O problem is encountered
 	 */
+	@Override
 	void close() throws AmqpException;
 
 	/**
@@ -77,5 +79,13 @@ public interface Connection {
 	 * @see com.rabbitmq.client.Connection#removeBlockedListener(BlockedListener)
 	 */
 	boolean removeBlockedListener(BlockedListener listener);
+
+	/**
+	 * Return the underlying RabbitMQ connection.
+	 * @return the connection.
+	 */
+	default @Nullable com.rabbitmq.client.Connection getDelegate() {
+		return null;
+	}
 
 }

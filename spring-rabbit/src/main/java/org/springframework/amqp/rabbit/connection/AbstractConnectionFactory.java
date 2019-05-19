@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -42,6 +42,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.ApplicationEventPublisherAware;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.util.Assert;
 import org.springframework.util.ObjectUtils;
@@ -58,6 +59,7 @@ import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
  * @author Gary Russell
  * @author Steve Powell
  * @author Artem Bilan
+ * @author Will Droste
  *
  */
 public abstract class AbstractConnectionFactory implements ConnectionFactory, DisposableBean, BeanNameAware,
@@ -69,7 +71,7 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 
 	private static final String BAD_URI = "setUri() was passed an invalid URI; it is ignored";
 
-	protected final Log logger = LogFactory.getLog(getClass());
+	protected final Log logger = LogFactory.getLog(getClass()); // NOSONAR
 
 	private final com.rabbitmq.client.ConnectionFactory rabbitConnectionFactory;
 
@@ -386,6 +388,7 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 		}
 	}
 
+	@Nullable
 	protected ExecutorService getExecutorService() {
 		return this.executorService;
 	}
@@ -428,6 +431,16 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 		}
 	}
 
+	/**
+	 * Return a bean name of the component or null if not a bean.
+	 * @return the bean name or null.
+	 * @since 1.7.9
+	 */
+	@Nullable
+	protected String getBeanName() {
+		return this.beanName;
+	}
+
 	public boolean hasPublisherConnectionFactory() {
 		return this.publisherConnectionFactory != null;
 	}
@@ -459,6 +472,26 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 			}
 
 			Connection connection = new SimpleConnection(rabbitConnection, this.closeTimeout);
+			if (rabbitConnection instanceof AutorecoveringConnection) {
+				((AutorecoveringConnection) rabbitConnection).addRecoveryListener(new RecoveryListener() {
+
+					@Override
+					public void handleRecoveryStarted(Recoverable recoverable) {
+						handleRecovery(recoverable);
+					}
+
+					@Override
+					public void handleRecovery(Recoverable recoverable) {
+						try {
+							connection.close();
+						}
+						catch (Exception e) {
+							AbstractConnectionFactory.this.logger.error("Failed to close auto-recover connection", e);
+						}
+					}
+
+				});
+			}
 			if (this.logger.isInfoEnabled()) {
 				this.logger.info("Created new connection: " + connectionName + "/" + connection);
 			}
@@ -520,12 +553,12 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 		}
 
 		@Override
-		public void handleBlocked(String reason) throws IOException {
+		public void handleBlocked(String reason) {
 			this.applicationEventPublisher.publishEvent(new ConnectionBlockedEvent(this.connection, reason));
 		}
 
 		@Override
-		public void handleUnblocked() throws IOException {
+		public void handleUnblocked() {
 			this.applicationEventPublisher.publishEvent(new ConnectionUnblockedEvent(this.connection));
 		}
 

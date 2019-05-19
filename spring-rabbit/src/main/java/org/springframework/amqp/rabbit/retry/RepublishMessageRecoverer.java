@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2017 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,6 +27,8 @@ import org.springframework.amqp.core.AmqpTemplate;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.rabbit.connection.RabbitUtils;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.util.Assert;
 
 /**
@@ -55,15 +57,21 @@ public class RepublishMessageRecoverer implements MessageRecoverer {
 
 	public static final String X_ORIGINAL_ROUTING_KEY = "x-original-routingKey";
 
-	protected final Log logger = LogFactory.getLog(getClass());
+	public static final int DEFAULT_FRAME_MAX_HEADROOM = 20_000;
 
-	protected final AmqpTemplate errorTemplate;
+	protected final Log logger = LogFactory.getLog(getClass()); // NOSONAR
 
-	protected final String errorRoutingKey;
+	protected final AmqpTemplate errorTemplate; // NOSONAR
 
-	protected final String errorExchangeName;
+	protected final String errorRoutingKey; // NOSONAR
+
+	protected final String errorExchangeName; // NOSONAR
 
 	private String errorRoutingKeyPrefix = "error.";
+
+	private int frameMaxHeadroom = DEFAULT_FRAME_MAX_HEADROOM;
+
+	private volatile Integer maxStackTraceLength = -1;
 
 	private MessageDeliveryMode deliveryMode = MessageDeliveryMode.PERSISTENT;
 
@@ -80,6 +88,9 @@ public class RepublishMessageRecoverer implements MessageRecoverer {
 		this.errorTemplate = errorTemplate;
 		this.errorExchangeName = errorExchange;
 		this.errorRoutingKey = errorRoutingKey;
+		if (!(this.errorTemplate instanceof RabbitTemplate)) {
+			this.maxStackTraceLength = Integer.MAX_VALUE;
+		}
 	}
 
 	/**
@@ -91,6 +102,19 @@ public class RepublishMessageRecoverer implements MessageRecoverer {
 	 */
 	public RepublishMessageRecoverer errorRoutingKeyPrefix(String errorRoutingKeyPrefix) {
 		this.setErrorRoutingKeyPrefix(errorRoutingKeyPrefix);
+		return this;
+	}
+
+	/**
+	 * Set the amount by which the negotiated frame_max is to be reduced when considering
+	 * truncating the stack trace header. Defaults to
+	 * {@value #DEFAULT_FRAME_MAX_HEADROOM}.
+	 * @param headroom the headroom
+	 * @return this.
+	 * @since 2.0.5
+	 */
+	public RepublishMessageRecoverer frameMaxHeadroom(int headroom) {
+		this.frameMaxHeadroom = headroom;
 		return this;
 	}
 
@@ -126,7 +150,8 @@ public class RepublishMessageRecoverer implements MessageRecoverer {
 	public void recover(Message message, Throwable cause) {
 		MessageProperties messageProperties = message.getMessageProperties();
 		Map<String, Object> headers = messageProperties.getHeaders();
-		headers.put(X_EXCEPTION_STACKTRACE, getStackTraceAsString(cause));
+		String stackTraceAsString = processStackTrace(cause);
+		headers.put(X_EXCEPTION_STACKTRACE, stackTraceAsString);
 		headers.put(X_EXCEPTION_MESSAGE, cause.getCause() != null ? cause.getCause().getMessage() : cause.getMessage());
 		headers.put(X_ORIGINAL_EXCHANGE, messageProperties.getReceivedExchange());
 		headers.put(X_ORIGINAL_ROUTING_KEY, messageProperties.getReceivedRoutingKey());
@@ -140,19 +165,40 @@ public class RepublishMessageRecoverer implements MessageRecoverer {
 		}
 
 		if (null != this.errorExchangeName) {
-			String routingKey = this.errorRoutingKey != null ? this.errorRoutingKey : this.prefixedOriginalRoutingKey(message);
+			String routingKey = this.errorRoutingKey != null ? this.errorRoutingKey
+					: this.prefixedOriginalRoutingKey(message);
 			this.errorTemplate.send(this.errorExchangeName, routingKey, message);
 			if (this.logger.isWarnEnabled()) {
-				this.logger.warn("Republishing failed message to exchange " + this.errorExchangeName);
+				this.logger.warn("Republishing failed message to exchange '" + this.errorExchangeName
+						+ "' with routing key " + routingKey);
 			}
 		}
 		else {
 			final String routingKey = this.prefixedOriginalRoutingKey(message);
 			this.errorTemplate.send(routingKey, message);
 			if (this.logger.isWarnEnabled()) {
-				this.logger.warn("Republishing failed message to the template's default exchange with routing key " + routingKey);
+				this.logger.warn("Republishing failed message to the template's default exchange with routing key "
+						+ routingKey);
 			}
 		}
+	}
+
+	private String processStackTrace(Throwable cause) {
+		String stackTraceAsString = getStackTraceAsString(cause);
+		if (this.maxStackTraceLength < 0) {
+			int maxStackTraceLen = RabbitUtils
+					.getMaxFrame(((RabbitTemplate) this.errorTemplate).getConnectionFactory());
+			if (maxStackTraceLen > 0) {
+				maxStackTraceLen -= this.frameMaxHeadroom;
+				this.maxStackTraceLength = maxStackTraceLen;
+			}
+		}
+		if (this.maxStackTraceLength > 0 && stackTraceAsString.length() > this.maxStackTraceLength) {
+			stackTraceAsString = stackTraceAsString.substring(0, this.maxStackTraceLength);
+			this.logger.warn("Stack trace in republished message header truncated due to frame_max limitations; "
+					+ "consider increasing frame_max on the broker or reduce the stack trace depth", cause);
+		}
+		return stackTraceAsString;
 	}
 
 	/**

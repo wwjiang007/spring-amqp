@@ -1,11 +1,11 @@
 /*
- * Copyright 2010-2017 the original author or authors.
+ * Copyright 2010-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,7 @@
 
 package org.springframework.amqp.rabbit.connection;
 
-import static org.hamcrest.CoreMatchers.allOf;
-import static org.hamcrest.Matchers.containsString;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -46,6 +43,7 @@ import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.beans.DirectFieldAccessor;
 import org.springframework.scheduling.concurrent.CustomizableThreadFactory;
 
+import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ConnectionFactory;
 
 /**
@@ -86,40 +84,36 @@ public abstract class AbstractConnectionFactoryTests {
 		doReturn(true).when(logger).isInfoEnabled();
 		new DirectFieldAccessor(connectionFactory).setPropertyValue("logger", logger);
 		Connection con = connectionFactory.createConnection();
-		assertEquals(1, called.get());
+		assertThat(called.get()).isEqualTo(1);
 		ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
 		verify(logger, times(2)).info(captor.capture());
-		assertThat(captor.getAllValues().get(0),
-				containsString("Attempting to connect to: null:0"));
-		assertThat(captor.getValue(),
-				allOf(containsString("Created new connection: "), containsString("SimpleConnection")));
+		assertThat(captor.getAllValues().get(0)).contains("Attempting to connect to: null:0");
+		assertThat(captor.getValue()).contains("Created new connection: ").contains("SimpleConnection");
 
 		con.close();
-		assertEquals(1, called.get());
+		assertThat(called.get()).isEqualTo(1);
 		verify(mockConnection, never()).close(anyInt());
 
 		connectionFactory.createConnection();
-		assertEquals(1, called.get());
+		assertThat(called.get()).isEqualTo(1);
 
 		connectionFactory.destroy();
-		assertEquals(0, called.get());
+		assertThat(called.get()).isEqualTo(0);
 		verify(mockConnection, atLeastOnce()).close(anyInt());
 
 		verify(mockConnectionFactory, times(1)).newConnection(any(ExecutorService.class), anyString());
 
 		connectionFactory.setAddresses("foo:5672,bar:5672");
 		con = connectionFactory.createConnection();
-		assertEquals(1, called.get());
+		assertThat(called.get()).isEqualTo(1);
 		captor = ArgumentCaptor.forClass(String.class);
 		verify(logger, times(4)).info(captor.capture());
-		assertThat(captor.getAllValues().get(2),
-				containsString("Attempting to connect to: [foo:5672, bar:5672]"));
-		assertThat(captor.getValue(),
-				allOf(containsString("Created new connection: "), containsString("SimpleConnection")));
+		assertThat(captor.getAllValues().get(2)).contains("Attempting to connect to: [foo:5672, bar:5672]");
+		assertThat(captor.getValue()).contains("Created new connection: ").contains("SimpleConnection");
 
 		con.close();
 		connectionFactory.destroy();
-		assertEquals(0, called.get());
+		assertThat(called.get()).isEqualTo(0);
 	}
 
 	@Test
@@ -133,7 +127,7 @@ public abstract class AbstractConnectionFactoryTests {
 		final AtomicInteger called = new AtomicInteger(0);
 		AbstractConnectionFactory connectionFactory = createConnectionFactory(mockConnectionFactory);
 		Connection con = connectionFactory.createConnection();
-		assertEquals(0, called.get());
+		assertThat(called.get()).isEqualTo(0);
 
 		connectionFactory.setConnectionListeners(Collections.singletonList(new ConnectionListener() {
 
@@ -148,17 +142,17 @@ public abstract class AbstractConnectionFactoryTests {
 			}
 
 		}));
-		assertEquals(1, called.get());
+		assertThat(called.get()).isEqualTo(1);
 
 		con.close();
-		assertEquals(1, called.get());
+		assertThat(called.get()).isEqualTo(1);
 		verify(mockConnection, never()).close(anyInt());
 
 		connectionFactory.createConnection();
-		assertEquals(1, called.get());
+		assertThat(called.get()).isEqualTo(1);
 
 		connectionFactory.destroy();
-		assertEquals(0, called.get());
+		assertThat(called.get()).isEqualTo(0);
 		verify(mockConnection, atLeastOnce()).close(anyInt());
 
 		verify(mockConnectionFactory, times(1)).newConnection(any(ExecutorService.class), anyString());
@@ -176,6 +170,7 @@ public abstract class AbstractConnectionFactoryTests {
 				.thenReturn(mockConnection1, mockConnection2);
 		// simulate a dead connection
 		when(mockConnection1.isOpen()).thenReturn(false);
+		when(mockConnection2.createChannel()).thenReturn(mock(Channel.class));
 
 		AbstractConnectionFactory connectionFactory = createConnectionFactory(mockConnectionFactory);
 
@@ -202,7 +197,7 @@ public abstract class AbstractConnectionFactoryTests {
 	}
 
 	@Test
-	public void testCreatesConnectionWithGivenFactory() throws Exception {
+	public void testCreatesConnectionWithGivenFactory() {
 		com.rabbitmq.client.ConnectionFactory mockConnectionFactory = mock(com.rabbitmq.client.ConnectionFactory.class);
 		doCallRealMethod().when(mockConnectionFactory).params(any(ExecutorService.class));
 		doCallRealMethod().when(mockConnectionFactory).setThreadFactory(any(ThreadFactory.class));
@@ -212,7 +207,7 @@ public abstract class AbstractConnectionFactoryTests {
 		ThreadFactory connectionThreadFactory = new CustomizableThreadFactory("connection-thread-");
 		connectionFactory.setConnectionThreadFactory(connectionThreadFactory);
 
-		assertEquals(connectionThreadFactory, mockConnectionFactory.getThreadFactory());
+		assertThat(mockConnectionFactory.getThreadFactory()).isEqualTo(connectionThreadFactory);
 	}
 
 }

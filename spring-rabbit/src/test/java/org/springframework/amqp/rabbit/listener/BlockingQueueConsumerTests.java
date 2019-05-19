@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,7 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -27,6 +25,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -35,13 +34,16 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.logging.log4j.Level;
 import org.junit.Rule;
@@ -229,10 +231,10 @@ public class BlockingQueueConsumerTests {
 				}
 			}
 		});
-		assertTrue(consumerLatch.await(10, TimeUnit.SECONDS));
+		assertThat(consumerLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		Consumer consumer = consumerCaptor.getValue();
 		consumer.handleCancel("consumer1");
-		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 	}
 
 	private void testRequeueOrNotDefaultYes(Exception ex, boolean expectedRequeue) throws Exception {
@@ -278,8 +280,11 @@ public class BlockingQueueConsumerTests {
 		doReturn(isOpen.get()).when(channel).isOpen();
 		when(channel.queueDeclarePassive(anyString()))
 				.then(invocation -> mock(AMQP.Queue.DeclareOk.class));
-		when(channel.basicConsume(anyString(), anyBoolean(), anyString(), anyBoolean(), anyBoolean(),
-				anyMap(), any(Consumer.class))).thenReturn("consumerTag");
+		doAnswer(i -> {
+			((Consumer) i.getArgument(6)).handleConsumeOk("consumerTag");
+			return "consumerTag";
+		}).when(channel).basicConsume(anyString(), anyBoolean(), anyString(), anyBoolean(), anyBoolean(),
+				anyMap(), any(Consumer.class));
 
 		BlockingQueueConsumer blockingQueueConsumer = new BlockingQueueConsumer(connectionFactory,
 				new DefaultMessagePropertiesConverter(), new ActiveObjectCounter<>(),
@@ -296,8 +301,9 @@ public class BlockingQueueConsumerTests {
 		verify(channel).basicCancel("consumerTag");
 	}
 
+	@SuppressWarnings("unchecked")
 	@Test
-	public void testDrainAndReject() throws IOException {
+	public void testDrainAndReject() throws IOException, TimeoutException {
 		ConnectionFactory connectionFactory = mock(ConnectionFactory.class);
 		Connection connection = mock(Connection.class);
 		ChannelProxy channel = mock(ChannelProxy.class);
@@ -310,9 +316,18 @@ public class BlockingQueueConsumerTests {
 		doReturn(isOpen.get()).when(channel).isOpen();
 		when(channel.queueDeclarePassive(anyString()))
 				.then(invocation -> mock(AMQP.Queue.DeclareOk.class));
-		when(channel.basicConsume(anyString(), anyBoolean(), anyString(), anyBoolean(), anyBoolean(),
-				anyMap(), any(Consumer.class))).thenReturn("consumerTag");
-
+		AtomicReference<Consumer> theConsumer = new AtomicReference<>();
+		doAnswer(inv -> {
+			Consumer consumer = inv.getArgument(6);
+			consumer.handleConsumeOk("consumerTag");
+			theConsumer.set(consumer);
+			return "consumerTag";
+		}).when(channel).basicConsume(anyString(), anyBoolean(), anyString(), anyBoolean(), anyBoolean(),
+				anyMap(), any(Consumer.class));
+		doAnswer(inv -> {
+			theConsumer.get().handleCancelOk("consumerTag");
+			return null;
+		}).when(channel).basicCancel("consumerTag");
 		BlockingQueueConsumer blockingQueueConsumer = new BlockingQueueConsumer(connectionFactory,
 				new DefaultMessagePropertiesConverter(), new ActiveObjectCounter<BlockingQueueConsumer>(),
 				AcknowledgeMode.AUTO, true, 2, "test");
@@ -323,7 +338,8 @@ public class BlockingQueueConsumerTests {
 		blockingQueueConsumer.start();
 
 		verify(channel).basicQos(2);
-		Consumer consumer = TestUtils.getPropertyValue(blockingQueueConsumer, "consumer", Consumer.class);
+		Consumer consumer = (Consumer) TestUtils.getPropertyValue(blockingQueueConsumer, "consumers", Map.class)
+				.get("test");
 		isOpen.set(false);
 		blockingQueueConsumer.stop();
 		verify(channel).basicCancel("consumerTag");
@@ -333,13 +349,11 @@ public class BlockingQueueConsumerTests {
 		consumer.handleDelivery("consumerTag", envelope, props, new byte[0]);
 		envelope = new Envelope(2, false, "foo", "bar");
 		consumer.handleDelivery("consumerTag", envelope, props, new byte[0]);
-		assertThat(TestUtils.getPropertyValue(blockingQueueConsumer, "queue", BlockingQueue.class).size(), equalTo(2));
+		assertThat(TestUtils.getPropertyValue(blockingQueueConsumer, "queue", BlockingQueue.class)).hasSize(2);
 		envelope = new Envelope(3, false, "foo", "bar");
 		consumer.handleDelivery("consumerTag", envelope, props, new byte[0]);
-		assertThat(TestUtils.getPropertyValue(blockingQueueConsumer, "queue", BlockingQueue.class).size(), equalTo(0));
-		verify(channel).basicNack(3, true, true);
-		verify(channel, times(2)).basicCancel("consumerTag");
+		assertThat(TestUtils.getPropertyValue(blockingQueueConsumer, "queue", BlockingQueue.class)).hasSize(0);
+		verify(channel, times(1)).basicCancel("consumerTag");
 	}
-
 
 }

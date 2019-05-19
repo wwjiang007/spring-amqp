@@ -1,11 +1,11 @@
 /*
- * Copyright 2016 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -32,15 +32,19 @@ public class Delivery {
 
 	private final Envelope envelope;
 
+	private final String queue;
+
 	private final AMQP.BasicProperties properties;
 
 	private final byte[] body;
 
-	public Delivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body) { //NOSONAR
+	public Delivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body, // NOSONAR
+			String queue) {
 		this.consumerTag = consumerTag;
 		this.envelope = envelope;
 		this.properties = properties;
-		this.body = body;
+		this.body = body; // NOSONAR
+		this.queue = queue;
 	}
 
 	/**
@@ -72,7 +76,15 @@ public class Delivery {
 	 * @return the message body.
 	 */
 	public byte[] getBody() {
-		return this.body;
+		return this.body; // NOSONAR
+	}
+
+	/**
+	 * Retrieve the queue.
+	 * @return the queue.
+	 */
+	public String getQueue() {
+		return this.queue;
 	}
 
 }

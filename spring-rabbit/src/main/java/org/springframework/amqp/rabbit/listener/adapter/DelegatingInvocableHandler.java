@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-2018 the original author or authors.
+ * Copyright 2015-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -39,7 +39,6 @@ import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.lang.Nullable;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.handler.annotation.Header;
-import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.handler.annotation.SendTo;
 import org.springframework.messaging.handler.invocation.InvocableHandlerMethod;
 import org.springframework.util.Assert;
@@ -47,10 +46,13 @@ import org.springframework.util.Assert;
 
 /**
  * Delegates to an {@link InvocableHandlerMethod} based on the message payload type.
- * Matches a single, non-annotated parameter or one that is annotated with {@link Payload}.
- * Matches must be unambiguous.
+ * Matches a single, non-annotated parameter or one that is annotated with
+ * {@link org.springframework.messaging.handler.annotation.Payload}. Matches must be
+ * unambiguous.
  *
  * @author Gary Russell
+ * @author Artem Bilan
+ *
  * @since 1.5
  *
  */
@@ -62,13 +64,11 @@ public class DelegatingInvocableHandler {
 
 	private final List<InvocableHandlerMethod> handlers;
 
-	private final ConcurrentMap<Class<?>, InvocableHandlerMethod> cachedHandlers =
-			new ConcurrentHashMap<Class<?>, InvocableHandlerMethod>();
+	private final ConcurrentMap<Class<?>, InvocableHandlerMethod> cachedHandlers = new ConcurrentHashMap<>();
 
 	private final InvocableHandlerMethod defaultHandler;
 
-	private final Map<InvocableHandlerMethod, Expression> handlerSendTo =
-			new HashMap<InvocableHandlerMethod, Expression>();
+	private final Map<InvocableHandlerMethod, Expression> handlerSendTo = new HashMap<>();
 
 	private final Object bean;
 
@@ -85,6 +85,7 @@ public class DelegatingInvocableHandler {
 	 */
 	public DelegatingInvocableHandler(List<InvocableHandlerMethod> handlers, Object bean,
 			BeanExpressionResolver beanExpressionResolver, BeanExpressionContext beanExpressionContext) {
+
 		this(handlers, null, bean, beanExpressionResolver, beanExpressionContext);
 	}
 
@@ -100,7 +101,8 @@ public class DelegatingInvocableHandler {
 	public DelegatingInvocableHandler(List<InvocableHandlerMethod> handlers,
 			@Nullable InvocableHandlerMethod defaultHandler, Object bean, BeanExpressionResolver beanExpressionResolver,
 			BeanExpressionContext beanExpressionContext) {
-		this.handlers = new ArrayList<InvocableHandlerMethod>(handlers);
+
+		this.handlers = new ArrayList<>(handlers);
 		this.defaultHandler = defaultHandler;
 		this.bean = bean;
 		this.resolver = beanExpressionResolver;
@@ -122,17 +124,17 @@ public class DelegatingInvocableHandler {
 	 * @throws Exception raised if no suitable argument resolver can be found,
 	 * or the method raised an exception.
 	 */
-	public Object invoke(Message<?> message, Object... providedArgs) throws Exception {
+	public InvocationResult invoke(Message<?> message, Object... providedArgs) throws Exception { // NOSONAR
 		Class<? extends Object> payloadClass = message.getPayload().getClass();
 		InvocableHandlerMethod handler = getHandlerForPayload(payloadClass);
 		Object result = handler.invoke(message, providedArgs);
 		if (message.getHeaders().get(AmqpHeaders.REPLY_TO) == null) {
 			Expression replyTo = this.handlerSendTo.get(handler);
 			if (replyTo != null) {
-				result = new AbstractAdaptableMessageListener.ResultHolder(result, replyTo);
+				return new InvocationResult(result, replyTo, handler.getMethod().getGenericReturnType());
 			}
 		}
-		return result;
+		return new InvocationResult(result, null, handler.getMethod().getGenericReturnType());
 	}
 
 	/**
@@ -161,7 +163,7 @@ public class DelegatingInvocableHandler {
 		}
 		if (replyTo == null) {
 			SendTo ann = AnnotationUtils.getAnnotation(this.bean.getClass(), SendTo.class);
-			replyTo = extractSendTo(this.getBean().getClass().getSimpleName(), ann);
+			replyTo = extractSendTo(getBean().getClass().getSimpleName(), ann);
 		}
 		if (replyTo != null) {
 			this.handlerSendTo.put(handler, PARSER.parseExpression(replyTo, PARSER_CONTEXT));
@@ -183,7 +185,8 @@ public class DelegatingInvocableHandler {
 
 	private String resolve(String value) {
 		if (this.resolver != null) {
-			Object newValue = this.resolver.evaluate(value, this.beanExpressionContext);
+			String resolvedValue = this.beanExpressionContext.getBeanFactory().resolveEmbeddedValue(value);
+			Object newValue = this.resolver.evaluate(resolvedValue, this.beanExpressionContext);
 			Assert.isInstanceOf(String.class, newValue, "Invalid @SendTo expression");
 			return (String) newValue;
 		}
@@ -218,24 +221,22 @@ public class DelegatingInvocableHandler {
 		// Single param; no annotation or not @Header
 		if (parameterAnnotations.length == 1) {
 			MethodParameter methodParameter = new MethodParameter(method, 0);
-			if (methodParameter.getParameterAnnotations().length == 0
-					|| !methodParameter.hasParameterAnnotation(Header.class)) {
-				if (methodParameter.getParameterType().isAssignableFrom(payloadClass)) {
-					return true;
-				}
+			if ((methodParameter.getParameterAnnotations().length == 0
+					|| !methodParameter.hasParameterAnnotation(Header.class))
+						&& methodParameter.getParameterType().isAssignableFrom(payloadClass)) {
+				return true;
 			}
 		}
 		boolean foundCandidate = false;
 		for (int i = 0; i < parameterAnnotations.length; i++) {
 			MethodParameter methodParameter = new MethodParameter(method, i);
-			if (methodParameter.getParameterAnnotations().length == 0
-					|| !methodParameter.hasParameterAnnotation(Header.class)) {
-				if (methodParameter.getParameterType().isAssignableFrom(payloadClass)) {
-					if (foundCandidate) {
-						throw new AmqpException("Ambiguous payload parameter for " + method.toGenericString());
-					}
-					foundCandidate = true;
+			if ((methodParameter.getParameterAnnotations().length == 0
+					|| !methodParameter.hasParameterAnnotation(Header.class))
+						&& methodParameter.getParameterType().isAssignableFrom(payloadClass)) {
+				if (foundCandidate) {
+					throw new AmqpException("Ambiguous payload parameter for " + method.toGenericString());
 				}
+				foundCandidate = true;
 			}
 		}
 		return foundCandidate;
@@ -247,8 +248,14 @@ public class DelegatingInvocableHandler {
 	 * @return the method name.
 	 */
 	public String getMethodNameFor(Object payload) {
-		InvocableHandlerMethod handlerForPayload = getHandlerForPayload(payload.getClass());
-		return handlerForPayload == null ? "no match" : handlerForPayload.getMethod().toGenericString(); //NOSONAR
+		InvocableHandlerMethod handlerForPayload = null;
+		try {
+			handlerForPayload = getHandlerForPayload(payload.getClass());
+		}
+		catch (Exception e) {
+			// NOSONAR
+		}
+		return handlerForPayload == null ? "no match" : handlerForPayload.getMethod().toGenericString();
 	}
 
 	/**
@@ -258,8 +265,7 @@ public class DelegatingInvocableHandler {
 	 * @since 2.0
 	 */
 	public Method getMethodFor(Object payload) {
-		InvocableHandlerMethod handlerForPayload = getHandlerForPayload(payload.getClass());
-		return handlerForPayload == null ? null : handlerForPayload.getMethod();
+		return getHandlerForPayload(payload.getClass()).getMethod();
 	}
 
 	public boolean hasDefaultHandler() {

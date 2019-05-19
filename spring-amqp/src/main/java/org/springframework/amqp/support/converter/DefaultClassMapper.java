@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,6 +27,8 @@ import java.util.Set;
 
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.lang.Nullable;
+import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
 
 /**
@@ -56,15 +58,15 @@ public class DefaultClassMapper implements ClassMapper, InitializingBean {
 					"java.lang"
 			);
 
-	private final Set<String> trustedPackages = new LinkedHashSet<String>(TRUSTED_PACKAGES);
+	private final Set<String> trustedPackages = new LinkedHashSet<>(TRUSTED_PACKAGES);
 
-	private volatile Map<String, Class<?>> idClassMapping = new HashMap<String, Class<?>>();
+	private volatile Map<String, Class<?>> idClassMapping = new HashMap<>();
 
-	private volatile Map<Class<?>, String> classIdMapping = new HashMap<Class<?>, String>();
+	private volatile Map<Class<?>, String> classIdMapping = new HashMap<>();
 
-	private volatile Class<?> defaultMapClass = LinkedHashMap.class;
+	private volatile Class<?> defaultMapClass = LinkedHashMap.class; // NOSONAR concrete type
 
-	private volatile Class<?> defaultType = LinkedHashMap.class;
+	private volatile Class<?> defaultType = LinkedHashMap.class; // NOSONAR concrete type
 
 	/**
 	 * The type returned by {@link #toClass(MessageProperties)} if no type information
@@ -72,26 +74,14 @@ public class DefaultClassMapper implements ClassMapper, InitializingBean {
 	 * @param defaultType the defaultType to set.
 	 */
 	public void setDefaultType(Class<?> defaultType) {
+		Assert.notNull(defaultType, "'defaultType' cannot be null");
 		this.defaultType = defaultType;
 	}
 
 	/**
 	 * Set the type of {@link Map} to use. For outbound messages, set the
-	 * {@value #DEFAULT_CLASSID_FIELD_NAME} header to {@code Hashtable}. For inbound messages,
-	 * if the {@value #DEFAULT_CLASSID_FIELD_NAME} header is {@code HashTable} convert to this
-	 * class.
-	 * @param defaultMapClass the map class.
-	 * @deprecated use {@link #setDefaultMapClass(Class)}
-	 */
-	@Deprecated
-	public void setDefaultHashtableClass(Class<?> defaultMapClass) {
-		this.defaultMapClass = defaultMapClass;
-	}
-
-	/**
-	 * Set the type of {@link Map} to use. For outbound messages, set the
 	 * {@value #DEFAULT_CLASSID_FIELD_NAME} header to {@code HashTable}. For inbound messages,
-	 * if the {@value #DEFAULT_CLASSID_FIELD_NAME} header is {@code HashTable} convert to this
+	 * if the {@value #DEFAULT_CLASSID_FIELD_NAME} header is {@code Hashtable} convert to this
 	 * class.
 	 * @param defaultMapClass the map class.
 	 * @since 2.0
@@ -127,7 +117,7 @@ public class DefaultClassMapper implements ClassMapper, InitializingBean {
 	 * @param trustedPackages the trusted Java packages for deserialization
 	 * @since 1.6.11
 	 */
-	public void setTrustedPackages(String... trustedPackages) {
+	public void setTrustedPackages(@Nullable String... trustedPackages) {
 		if (trustedPackages != null) {
 			for (String whiteListClass : trustedPackages) {
 				if ("*".equals(whiteListClass)) {
@@ -156,12 +146,12 @@ public class DefaultClassMapper implements ClassMapper, InitializingBean {
 	 * <p>Creates the reverse mapping from class to type id.
 	 */
 	@Override
-	public void afterPropertiesSet() throws Exception {
+	public void afterPropertiesSet() {
 		validateIdTypeMapping();
 	}
 
 	private void validateIdTypeMapping() {
-		Map<String, Class<?>> finalIdClassMapping = new HashMap<String, Class<?>>();
+		Map<String, Class<?>> finalIdClassMapping = new HashMap<>();
 		this.classIdMapping.clear();
 		for (Entry<String, Class<?>> entry : this.idClassMapping.entrySet()) {
 			String id = entry.getKey();
@@ -214,14 +204,10 @@ public class DefaultClassMapper implements ClassMapper, InitializingBean {
 						"If the serialization is only done by a trusted source, you can also enable trust all (*).");
 			}
 			else {
-				return ClassUtils.forName(classId, getClass().getClassLoader());
+				return ClassUtils.forName(classId, ClassUtils.getDefaultClassLoader());
 			}
 		}
-		catch (ClassNotFoundException e) {
-			throw new MessageConversionException(
-					"failed to resolve class name [" + classId + "]", e);
-		}
-		catch (LinkageError e) {
+		catch (ClassNotFoundException | LinkageError e) {
 			throw new MessageConversionException(
 					"failed to resolve class name [" + classId + "]", e);
 		}

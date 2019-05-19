@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -96,7 +96,7 @@ class ListenerContainerParser implements BeanDefinitionParser {
 				parserContext.getReaderContext().error("Unexpected configuration for bean " + group, element);
 			}
 			containerList = (ManagedList<RuntimeBeanReference>) constructorArgumentValues
-					.getIndexedArgumentValue(0, ManagedList.class).getValue();
+					.getIndexedArgumentValue(0, ManagedList.class).getValue(); // NOSONAR never null
 		}
 
 		List<Element> childElements = DomUtils.getChildElementsByTagName(element, LISTENER_ELEMENT);
@@ -108,7 +108,7 @@ class ListenerContainerParser implements BeanDefinitionParser {
 		return null;
 	}
 
-	private void parseListener(Element listenerEle, Element containerEle, ParserContext parserContext,
+	private void parseListener(Element listenerEle, Element containerEle, ParserContext parserContext, // NOSONAR complexity
 			ManagedList<RuntimeBeanReference> containerList) {
 		RootBeanDefinition listenerDef = new RootBeanDefinition();
 		listenerDef.setSource(parserContext.extractSource(listenerEle));

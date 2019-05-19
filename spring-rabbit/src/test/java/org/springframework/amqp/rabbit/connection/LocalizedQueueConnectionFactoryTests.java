@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-2017 the original author or authors.
+ * Copyright 2015-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,7 @@
 
 package org.springframework.amqp.rabbit.connection;
 
-import static org.hamcrest.Matchers.containsString;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -32,8 +29,6 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.net.MalformedURLException;
-import java.net.URISyntaxException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -92,17 +87,21 @@ public class LocalizedQueueConnectionFactoryTests {
 				adminUris, nodes, vhost, username, password, false, null) {
 
 			@Override
-			protected Client createClient(String adminUri, String username, String password)
-					throws MalformedURLException, URISyntaxException {
+			protected Client createClient(String adminUri, String username, String password) {
 				return firstServer.get() ? client1 : client2;
 			}
 
 			@Override
-			protected ConnectionFactory createConnectionFactory(String address, String node) throws Exception {
+			protected ConnectionFactory createConnectionFactory(String address, String node) {
 				return mockCFs.get(address);
 			}
 
 		};
+		Map<?, ?> nodeAddress = TestUtils.getPropertyValue(lqcf, "nodeToAddress", Map.class);
+		assertThat(nodeAddress.get("rabbit@foo")).isEqualTo(rabbit1);
+		assertThat(nodeAddress.get("rabbit@bar")).isEqualTo(rabbit2);
+		String[] admins = TestUtils.getPropertyValue(lqcf, "adminUris", String[].class);
+		assertThat(admins).containsExactly(adminUris);
 		Log logger = spy(TestUtils.getPropertyValue(lqcf, "logger", Log.class));
 		doReturn(true).when(logger).isInfoEnabled();
 		new DirectFieldAccessor(lqcf).setPropertyValue("logger", logger);
@@ -112,28 +111,28 @@ public class LocalizedQueueConnectionFactoryTests {
 		container.setQueueNames("q");
 		container.afterPropertiesSet();
 		container.start();
-		assertTrue(latch1.await(10, TimeUnit.SECONDS));
+		assertThat(latch1.await(10, TimeUnit.SECONDS)).isTrue();
 		Channel channel = this.channels.get(rabbit1);
-		assertNotNull(channel);
+		assertThat(channel).isNotNull();
 		verify(channel).basicConsume(anyString(), anyBoolean(), anyString(), anyBoolean(),
 				anyBoolean(), anyMap(),
 				any(Consumer.class));
 		verify(logger, atLeast(1)).info(captor.capture());
-		assertTrue(assertLog(captor.getAllValues(), "Queue: q is on node: rabbit@foo at: localhost:1235"));
+		assertThat(assertLog(captor.getAllValues(), "Queue: q is on node: rabbit@foo at: localhost:1235")).isTrue();
 
 		// Fail rabbit1 and verify the container switches to rabbit2
 
 		firstServer.set(false);
 		this.consumers.get(rabbit1).handleCancel(consumerTags.get(rabbit1));
-		assertTrue(latch2.await(10, TimeUnit.SECONDS));
+		assertThat(latch2.await(10, TimeUnit.SECONDS)).isTrue();
 		channel = this.channels.get(rabbit2);
-		assertNotNull(channel);
+		assertThat(channel).isNotNull();
 		verify(channel).basicConsume(anyString(), anyBoolean(), anyString(), anyBoolean(),
 				anyBoolean(), anyMap(),
 				any(Consumer.class));
 		container.stop();
 		verify(logger, atLeast(1)).info(captor.capture());
-		assertTrue(assertLog(captor.getAllValues(), "Queue: q is on node: rabbit@bar at: localhost:1236"));
+		assertThat(assertLog(captor.getAllValues(), "Queue: q is on node: rabbit@bar at: localhost:1236")).isTrue();
 	}
 
 	private boolean assertLog(List<String> logRows, String expected) {
@@ -169,8 +168,7 @@ public class LocalizedQueueConnectionFactoryTests {
 			lqcf.getTargetConnectionFactory("[foo, bar]");
 		}
 		catch (IllegalArgumentException e) {
-			assertThat(e.getMessage(),
-					containsString("Cannot use LocalizedQueueConnectionFactory with more than one queue: [foo, bar]"));
+			assertThat(e.getMessage()).contains("Cannot use LocalizedQueueConnectionFactory with more than one queue: [foo, bar]");
 		}
 	}
 

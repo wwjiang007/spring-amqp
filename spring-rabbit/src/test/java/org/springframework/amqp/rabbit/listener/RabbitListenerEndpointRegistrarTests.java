@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2015 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,13 +16,12 @@
 
 package org.springframework.amqp.rabbit.listener;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
 import org.springframework.amqp.rabbit.config.RabbitListenerContainerTestFactory;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerEndpoint;
@@ -34,9 +33,6 @@ import org.springframework.beans.factory.support.StaticListableBeanFactory;
  * @since 1.4
  */
 public class RabbitListenerEndpointRegistrarTests {
-
-	@Rule
-	public final ExpectedException thrown = ExpectedException.none();
 
 	private final RabbitListenerEndpointRegistrar registrar = new RabbitListenerEndpointRegistrar();
 
@@ -53,14 +49,14 @@ public class RabbitListenerEndpointRegistrarTests {
 
 	@Test
 	public void registerNullEndpoint() {
-		thrown.expect(IllegalArgumentException.class);
-		registrar.registerEndpoint(null, containerFactory);
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> registrar.registerEndpoint(null, containerFactory));
 	}
 
 	@Test
 	public void registerNullEndpointId() {
-		thrown.expect(IllegalArgumentException.class);
-		registrar.registerEndpoint(new SimpleRabbitListenerEndpoint(), containerFactory);
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> registrar.registerEndpoint(new SimpleRabbitListenerEndpoint(), containerFactory));
 	}
 
 	@Test
@@ -68,43 +64,43 @@ public class RabbitListenerEndpointRegistrarTests {
 		SimpleRabbitListenerEndpoint endpoint = new SimpleRabbitListenerEndpoint();
 		endpoint.setId("");
 
-		thrown.expect(IllegalArgumentException.class);
-		registrar.registerEndpoint(endpoint, containerFactory);
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> registrar.registerEndpoint(endpoint, containerFactory));
 	}
 
 	@Test
-	public void registerNullContainerFactoryIsAllowed() throws Exception {
+	public void registerNullContainerFactoryIsAllowed() {
 		SimpleRabbitListenerEndpoint endpoint = new SimpleRabbitListenerEndpoint();
 		endpoint.setId("some id");
 		registrar.setContainerFactory(containerFactory);
 		registrar.registerEndpoint(endpoint, null);
 		registrar.afterPropertiesSet();
-		assertNotNull("Container not created", registry.getListenerContainer("some id"));
-		assertEquals("some id", registry.getListenerContainerIds().iterator().next());
-		assertEquals(1, registry.getListenerContainers().size());
+		assertThat(registry.getListenerContainer("some id")).as("Container not created").isNotNull();
+		assertThat(registry.getListenerContainerIds().iterator().next()).isEqualTo("some id");
+		assertThat(registry.getListenerContainers()).hasSize(1);
 	}
 
 	@Test
-	public void registerNullContainerFactoryWithNoDefault() throws Exception {
+	public void registerNullContainerFactoryWithNoDefault() {
 		SimpleRabbitListenerEndpoint endpoint = new SimpleRabbitListenerEndpoint();
 		endpoint.setId("some id");
 		registrar.registerEndpoint(endpoint, null);
 
-		thrown.expect(IllegalStateException.class);
-		thrown.expectMessage(endpoint.toString());
-		registrar.afterPropertiesSet();
+		assertThatIllegalStateException()
+			.isThrownBy(() -> registrar.afterPropertiesSet())
+			.withMessageContaining(endpoint.toString());
 	}
 
 	@Test
-	public void registerContainerWithoutFactory() throws Exception {
+	public void registerContainerWithoutFactory() {
 		SimpleRabbitListenerEndpoint endpoint = new SimpleRabbitListenerEndpoint();
 		endpoint.setId("myEndpoint");
 		registrar.setContainerFactory(containerFactory);
 		registrar.registerEndpoint(endpoint);
 		registrar.afterPropertiesSet();
-		assertNotNull("Container not created", registry.getListenerContainer("myEndpoint"));
-		assertEquals("myEndpoint", registry.getListenerContainerIds().iterator().next());
-		assertEquals(1, registry.getListenerContainers().size());
+		assertThat(registry.getListenerContainer("myEndpoint")).as("Container not created").isNotNull();
+		assertThat(registry.getListenerContainerIds().iterator().next()).isEqualTo("myEndpoint");
+		assertThat(registry.getListenerContainers()).hasSize(1);
 	}
 
 }

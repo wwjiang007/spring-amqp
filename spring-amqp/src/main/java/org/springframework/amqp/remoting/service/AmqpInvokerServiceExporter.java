@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,7 +22,6 @@ import org.springframework.amqp.core.AmqpTemplate;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.core.MessageProperties;
-import org.springframework.amqp.remoting.client.AmqpProxyFactoryBean;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.amqp.support.converter.SimpleMessageConverter;
 import org.springframework.remoting.support.RemoteInvocation;
@@ -31,7 +30,7 @@ import org.springframework.remoting.support.RemoteInvocationResult;
 
 /**
  * This message listener exposes a plain java service via AMQP. Such services can be accessed via plain AMQP or via
- * {@link AmqpProxyFactoryBean}.
+ * {@link org.springframework.amqp.remoting.client.AmqpProxyFactoryBean}.
  *
  * To configure this message listener so that it actually receives method calls via AMQP, it needs to be put into a
  * listener container. See {@link MessageListener}.
@@ -48,7 +47,7 @@ import org.springframework.remoting.support.RemoteInvocationResult;
  *
  * <p>
  * This listener responds to "Request/Reply"-style messages as described <a href=
- * "http://static.springsource.org/spring-amqp/reference/html/amqp.html#request-reply" >here</a>.
+ * "https://docs.spring.io/spring-amqp/reference/html/amqp.html#request-reply" >here</a>.
  *
  * @author David Bilge
  * @author Gary Russell
@@ -71,7 +70,7 @@ public class AmqpInvokerServiceExporter extends RemoteInvocationBasedExporter im
 		Object invocationRaw = this.messageConverter.fromMessage(message);
 
 		RemoteInvocationResult remoteInvocationResult;
-		if (invocationRaw == null || !(invocationRaw instanceof RemoteInvocation)) {
+		if (!(invocationRaw instanceof RemoteInvocation)) {
 			remoteInvocationResult =  new RemoteInvocationResult(
 					new IllegalArgumentException("The message does not contain a RemoteInvocation payload"));
 		}

@@ -1,11 +1,11 @@
 /*
- * Copyright 2016 the original author or authors.
+ * Copyright 2016-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,11 +16,7 @@
 
 package org.springframework.amqp.rabbit.test;
 
-import static org.hamcrest.Matchers.equalTo;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.concurrent.TimeUnit;
 
@@ -39,21 +35,25 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.junit.BrokerRunning;
 import org.springframework.amqp.rabbit.test.RabbitListenerTestHarness.InvocationData;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.context.support.AnnotationConfigContextLoader;
 
 /**
  * @author Gary Russell
+ * @author Artem Bilan
+ *
  * @since 1.6
  *
  */
-@ContextConfiguration
-@RunWith(SpringJUnit4ClassRunner.class)
+@ContextConfiguration(loader = ExampleRabbitListenerCaptureTest.NoBeansOverrideAnnotationConfigContextLoader.class)
+@RunWith(SpringRunner.class)
 @DirtiesContext
 public class ExampleRabbitListenerCaptureTest {
 
@@ -74,12 +74,12 @@ public class ExampleRabbitListenerCaptureTest {
 
 	@Test
 	public void testTwoWay() throws Exception {
-		assertEquals("FOO", this.rabbitTemplate.convertSendAndReceive(this.queue1.getName(), "foo"));
+		assertThat(this.rabbitTemplate.convertSendAndReceive(this.queue1.getName(), "foo")).isEqualTo("FOO");
 
 		InvocationData invocationData = this.harness.getNextInvocationDataFor("foo", 10, TimeUnit.SECONDS);
-		assertNotNull(invocationData);
-		assertThat((String) invocationData.getArguments()[0], equalTo("foo"));
-		assertThat((String) invocationData.getResult(), equalTo("FOO"));
+		assertThat(invocationData).isNotNull();
+		assertThat((String) invocationData.getArguments()[0]).isEqualTo("foo");
+		assertThat((String) invocationData.getResult()).isEqualTo("FOO");
 	}
 
 	@Test
@@ -89,31 +89,31 @@ public class ExampleRabbitListenerCaptureTest {
 		this.rabbitTemplate.convertAndSend(this.queue2.getName(), "ex");
 
 		InvocationData invocationData = this.harness.getNextInvocationDataFor("bar", 10, TimeUnit.SECONDS);
-		assertNotNull(invocationData);
+		assertThat(invocationData).isNotNull();
 		Object[] args = invocationData.getArguments();
-		assertThat((String) args[0], equalTo("bar"));
-		assertThat((String) args[1], equalTo(queue2.getName()));
+		assertThat((String) args[0]).isEqualTo("bar");
+		assertThat((String) args[1]).isEqualTo(queue2.getName());
 
 		invocationData = this.harness.getNextInvocationDataFor("bar", 10, TimeUnit.SECONDS);
-		assertNotNull(invocationData);
+		assertThat(invocationData).isNotNull();
 		args = invocationData.getArguments();
-		assertThat((String) args[0], equalTo("baz"));
-		assertThat((String) args[1], equalTo(queue2.getName()));
+		assertThat((String) args[0]).isEqualTo("baz");
+		assertThat((String) args[1]).isEqualTo(queue2.getName());
 
 		invocationData = this.harness.getNextInvocationDataFor("bar", 10, TimeUnit.SECONDS);
-		assertNotNull(invocationData);
+		assertThat(invocationData).isNotNull();
 		args = invocationData.getArguments();
-		assertThat((String) args[0], equalTo("ex"));
-		assertThat((String) args[1], equalTo(queue2.getName()));
-		assertNotNull(invocationData.getThrowable());
-		assertEquals("ex", invocationData.getThrowable().getMessage());
+		assertThat((String) args[0]).isEqualTo("ex");
+		assertThat((String) args[1]).isEqualTo(queue2.getName());
+		assertThat(invocationData.getThrowable()).isNotNull();
+		assertThat(invocationData.getThrowable().getMessage()).isEqualTo("ex");
 
 		invocationData = this.harness.getNextInvocationDataFor("bar", 10, TimeUnit.SECONDS);
-		assertNotNull(invocationData);
+		assertThat(invocationData).isNotNull();
 		args = invocationData.getArguments();
-		assertThat((String) args[0], equalTo("ex"));
-		assertThat((String) args[1], equalTo(queue2.getName()));
-		assertNull(invocationData.getThrowable());
+		assertThat((String) args[0]).isEqualTo("ex");
+		assertThat((String) args[1]).isEqualTo(queue2.getName());
+		assertThat(invocationData.getThrowable()).isNull();
 	}
 
 	@Configuration
@@ -179,4 +179,15 @@ public class ExampleRabbitListenerCaptureTest {
 
 	}
 
+
+	public static class NoBeansOverrideAnnotationConfigContextLoader extends AnnotationConfigContextLoader {
+
+		@Override
+		protected void customizeBeanFactory(DefaultListableBeanFactory beanFactory) {
+			beanFactory.setAllowBeanDefinitionOverriding(false);
+		}
+
+	}
+
 }
+

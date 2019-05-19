@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,6 +21,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Type;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -31,8 +32,11 @@ import java.util.Map;
  * @author Gary Russell
  * @author Dmitry Chernyshov
  * @author Artem Bilan
+ * @author Csaba Soti
  */
 public class MessageProperties implements Serializable {
+
+	private static final int INT_MASK = 32;
 
 	private static final long serialVersionUID = 1619000546531112290L;
 
@@ -62,72 +66,88 @@ public class MessageProperties implements Serializable {
 
 	public static final Integer DEFAULT_PRIORITY = 0;
 
-	private final Map<String, Object> headers = new HashMap<String, Object>();
+	private final Map<String, Object> headers = new HashMap<>();
 
-	private volatile Date timestamp;
+	private Date timestamp;
 
-	private volatile String messageId;
+	private String messageId;
 
-	private volatile String userId;
+	private String userId;
 
-	private volatile String appId;
+	private String appId;
 
-	private volatile String clusterId;
+	private String clusterId;
 
-	private volatile String type;
+	private String type;
 
-	private volatile String correlationId;
+	private String correlationId;
 
-	private volatile String replyTo;
+	private String replyTo;
 
-	private volatile String contentType = DEFAULT_CONTENT_TYPE;
+	private String contentType = DEFAULT_CONTENT_TYPE;
 
-	private volatile String contentEncoding;
+	private String contentEncoding;
 
-	private volatile long contentLength;
+	private long contentLength;
 
-	private volatile boolean contentLengthSet;
+	private boolean contentLengthSet;
 
-	private volatile MessageDeliveryMode deliveryMode = DEFAULT_DELIVERY_MODE;
+	private MessageDeliveryMode deliveryMode = DEFAULT_DELIVERY_MODE;
 
-	private volatile String expiration;
+	private String expiration;
 
-	private volatile Integer priority = DEFAULT_PRIORITY;
+	private Integer priority = DEFAULT_PRIORITY;
 
-	private volatile Boolean redelivered;
+	private Boolean redelivered;
 
-	private volatile String receivedExchange;
+	private String receivedExchange;
 
-	private volatile String receivedRoutingKey;
+	private String receivedRoutingKey;
 
-	private volatile String receivedUserId;
+	private String receivedUserId;
 
-	private volatile long deliveryTag;
+	private long deliveryTag;
 
-	private volatile boolean deliveryTagSet;
+	private boolean deliveryTagSet;
 
-	private volatile Integer messageCount;
+	private Integer messageCount;
 
 	// Not included in hashCode()
 
-	private volatile String consumerTag;
+	private String consumerTag;
 
-	private volatile String consumerQueue;
+	private String consumerQueue;
 
-	private volatile Integer receivedDelay;
+	private Integer receivedDelay;
 
-	private volatile MessageDeliveryMode receivedDeliveryMode;
+	private MessageDeliveryMode receivedDeliveryMode;
 
-	private volatile boolean finalRetryForMessageWithNoId;
+	private boolean finalRetryForMessageWithNoId;
 
-	private volatile transient Type inferredArgumentType;
+	private long publishSequenceNumber;
 
-	private volatile transient Method targetMethod;
+	private boolean lastInBatch;
 
-	private volatile transient Object targetBean;
+	private transient Type inferredArgumentType;
+
+	private transient Method targetMethod;
+
+	private transient Object targetBean;
 
 	public void setHeader(String key, Object value) {
 		this.headers.put(key, value);
+	}
+
+	/**
+	 * Typed getter for a header.
+	 * @param headerName the header name.
+	 * @param <T> the type.
+	 * @return the header value
+	 * @since 2.2
+	 */
+	@SuppressWarnings("unchecked")
+	public <T> T getHeader(String headerName) {
+		return (T) this.headers.get(headerName);
 	}
 
 	public Map<String, Object> getHeaders() {
@@ -221,26 +241,6 @@ public class MessageProperties implements Serializable {
 	 */
 	public String getCorrelationId() {
 		return this.correlationId;
-	}
-
-	/**
-	 * Get the correlation id.
-	 * @return the correlation id
-	 * @deprecated use {@link #getCorrelationId()}.
-	 */
-	@Deprecated
-	public String getCorrelationIdString() {
-		return this.correlationId;
-	}
-
-	/**
-	 * Set the correlation id.
-	 * @param correlationId the id.
-	 * @deprecated - use {@link #setCorrelationId(String)}.
-	 */
-	@Deprecated
-	public void setCorrelationIdString(String correlationId) {
-		this.correlationId = correlationId;
 	}
 
 	public void setReplyTo(String replyTo) {
@@ -461,6 +461,24 @@ public class MessageProperties implements Serializable {
 	}
 
 	/**
+	 * Return the publish sequence number if publisher confirms are enabled; set by the template.
+	 * @return the sequence number.
+	 * @since 2.1
+	 */
+	public long getPublishSequenceNumber() {
+		return this.publishSequenceNumber;
+	}
+
+	/**
+	 * Set the publish sequence number, if publisher confirms are enabled; set by the template.
+	 * @param publishSequenceNumber the sequence number.
+	 * @since 2.1
+	 */
+	public void setPublishSequenceNumber(long publishSequenceNumber) {
+		this.publishSequenceNumber = publishSequenceNumber;
+	}
+
+	/**
 	 * The inferred target argument type when using a method-level
 	 * {@code @RabbitListener}.
 	 * @return the type.
@@ -516,18 +534,50 @@ public class MessageProperties implements Serializable {
 		this.targetBean = targetBean;
 	}
 
-	@Override
+	/**
+	 * When true; the message having these properties is the last message from a batch.
+	 * @return true for the last message.
+	 * @since 2.2
+	 */
+	public boolean isLastInBatch() {
+		return this.lastInBatch;
+	}
+
+	/**
+	 * Set to true to indicate these properties are for the last message in a batch.
+	 * @param lastInBatch true for the last.
+	 * @since 2.2
+	 */
+	public void setLastInBatch(boolean lastInBatch) {
+		this.lastInBatch = lastInBatch;
+	}
+
+	/**
+	 * Return the x-death header.
+	 * @return the header.
+	 */
+	@SuppressWarnings("unchecked")
+	public List<Map<String, ?>> getXDeathHeader() {
+		try {
+			return (List<Map<String, ?>>) this.headers.get("x-death");
+		}
+		catch (@SuppressWarnings("unused") Exception e) {
+			return null;
+		}
+	}
+
+	@Override // NOSONAR complexity
 	public int hashCode() {
 		final int prime = 31;
 		int result = 1;
 		result = prime * result + ((this.appId == null) ? 0 : this.appId.hashCode());
 		result = prime * result + ((this.clusterId == null) ? 0 : this.clusterId.hashCode());
 		result = prime * result + ((this.contentEncoding == null) ? 0 : this.contentEncoding.hashCode());
-		result = prime * result + (int) (this.contentLength ^ (this.contentLength >>> 32));
+		result = prime * result + (int) (this.contentLength ^ (this.contentLength >>> INT_MASK));
 		result = prime * result + ((this.contentType == null) ? 0 : this.contentType.hashCode());
-		result = prime * result + this.correlationId.hashCode();
+		result = prime * result + ((this.correlationId == null) ? 0 : this.correlationId.hashCode());
 		result = prime * result + ((this.deliveryMode == null) ? 0 : this.deliveryMode.hashCode());
-		result = prime * result + (int) (this.deliveryTag ^ (this.deliveryTag >>> 32));
+		result = prime * result + (int) (this.deliveryTag ^ (this.deliveryTag >>> INT_MASK));
 		result = prime * result + ((this.expiration == null) ? 0 : this.expiration.hashCode());
 		result = prime * result + this.headers.hashCode();
 		result = prime * result + ((this.messageCount == null) ? 0 : this.messageCount.hashCode());
@@ -543,8 +593,8 @@ public class MessageProperties implements Serializable {
 		return result;
 	}
 
-	@Override
-	public boolean equals(Object obj) {
+	@Override // NOSONAR complexity
+	public boolean equals(Object obj) { // NOSONAR line count
 		if (this == obj) {
 			return true;
 		}
@@ -590,9 +640,16 @@ public class MessageProperties implements Serializable {
 		else if (!this.contentType.equals(other.contentType)) {
 			return false;
 		}
-		if (!this.correlationId.equals(other.correlationId)) {
+
+		if (this.correlationId == null) {
+			if (other.correlationId != null) {
+				return false;
+			}
+		}
+		else if (!this.correlationId.equals(other.correlationId)) {
 			return false;
 		}
+
 		if (this.deliveryMode != other.deliveryMode) {
 			return false;
 		}
@@ -693,7 +750,7 @@ public class MessageProperties implements Serializable {
 		return true;
 	}
 
-	@Override
+	@Override // NOSONAR complexity
 	public String toString() {
 		return "MessageProperties [headers=" + this.headers
 				+ (this.timestamp == null ? "" : ", timestamp=" + this.timestamp)

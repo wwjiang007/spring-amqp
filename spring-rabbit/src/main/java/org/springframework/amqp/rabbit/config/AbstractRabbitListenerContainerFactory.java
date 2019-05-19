@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-2018 the original author or authors.
+ * Copyright 2014-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,8 +17,10 @@
 package org.springframework.amqp.rabbit.config;
 
 
+import java.util.Arrays;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import org.aopalliance.aop.Advice;
 import org.apache.commons.logging.Log;
@@ -26,19 +28,23 @@ import org.apache.commons.logging.LogFactory;
 
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.MessagePostProcessor;
+import org.springframework.amqp.rabbit.batch.BatchingStrategy;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpoint;
-import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.adapter.AbstractAdaptableMessageListener;
 import org.springframework.amqp.support.ConsumerTagStrategy;
 import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.amqp.utils.JavaUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.ApplicationEventPublisherAware;
+import org.springframework.lang.Nullable;
+import org.springframework.retry.RecoveryCallback;
+import org.springframework.retry.support.RetryTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.util.ErrorHandler;
 import org.springframework.util.backoff.BackOff;
@@ -60,7 +66,9 @@ import org.springframework.util.backoff.FixedBackOff;
 public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractMessageListenerContainer>
 		implements RabbitListenerContainerFactory<C>, ApplicationContextAware, ApplicationEventPublisherAware {
 
-	protected final Log logger = LogFactory.getLog(getClass());
+	protected final Log logger = LogFactory.getLog(getClass()); // NOSONAR
+
+	protected final AtomicInteger counter = new AtomicInteger(); // NOSONAR
 
 	private ConnectionFactory connectionFactory;
 
@@ -106,7 +114,15 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	private MessagePostProcessor[] beforeSendReplyPostProcessors;
 
-	protected final AtomicInteger counter = new AtomicInteger();
+	private RetryTemplate retryTemplate;
+
+	private RecoveryCallback<?> recoveryCallback;
+
+	private Consumer<C> containerConfigurer;
+
+	private boolean batchListener;
+
+	private BatchingStrategy batchingStrategy;
 
 	/**
 	 * @param connectionFactory The connection factory.
@@ -126,7 +142,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	/**
 	 * @param messageConverter the message converter to use
-	 * @see AbstractMessageListenerContainer#setMessageConverter(MessageConverter)
+	 * @see RabbitListenerEndpoint#setMessageConverter(MessageConverter)
 	 */
 	public void setMessageConverter(MessageConverter messageConverter) {
 		this.messageConverter = messageConverter;
@@ -150,7 +166,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	/**
 	 * @param taskExecutor the {@link Executor} to use.
-	 * @see SimpleMessageListenerContainer#setTaskExecutor
+	 * @see AbstractMessageListenerContainer#setTaskExecutor
 	 */
 	public void setTaskExecutor(Executor taskExecutor) {
 		this.taskExecutor = taskExecutor;
@@ -158,7 +174,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	/**
 	 * @param transactionManager the {@link PlatformTransactionManager} to use.
-	 * @see SimpleMessageListenerContainer#setTransactionManager
+	 * @see AbstractMessageListenerContainer#setTransactionManager
 	 */
 	public void setTransactionManager(PlatformTransactionManager transactionManager) {
 		this.transactionManager = transactionManager;
@@ -166,7 +182,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	/**
 	 * @param prefetch the prefetch count
-	 * @see SimpleMessageListenerContainer#setPrefetchCount(int)
+	 * @see AbstractMessageListenerContainer#setPrefetchCount(int)
 	 */
 	public void setPrefetchCount(Integer prefetch) {
 		this.prefetchCount = prefetch;
@@ -174,7 +190,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	/**
 	 * @param requeueRejected true to reject by default.
-	 * @see SimpleMessageListenerContainer#setDefaultRequeueRejected
+	 * @see AbstractMessageListenerContainer#setDefaultRequeueRejected
 	 */
 	public void setDefaultRequeueRejected(Boolean requeueRejected) {
 		this.defaultRequeueRejected = requeueRejected;
@@ -184,21 +200,22 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 	 * @return the advice chain that was set. Defaults to {@code null}.
 	 * @since 1.7.4
 	 */
+	@Nullable
 	public Advice[] getAdviceChain() {
-		return this.adviceChain;
+		return this.adviceChain == null ? null : Arrays.copyOf(this.adviceChain, this.adviceChain.length);
 	}
 
 	/**
 	 * @param adviceChain the advice chain to set.
-	 * @see SimpleMessageListenerContainer#setAdviceChain
+	 * @see AbstractMessageListenerContainer#setAdviceChain
 	 */
 	public void setAdviceChain(Advice... adviceChain) {
-		this.adviceChain = adviceChain;
+		this.adviceChain = adviceChain == null ? null : Arrays.copyOf(adviceChain, adviceChain.length);
 	}
 
 	/**
 	 * @param recoveryInterval The recovery interval.
-	 * @see SimpleMessageListenerContainer#setRecoveryInterval
+	 * @see AbstractMessageListenerContainer#setRecoveryInterval
 	 */
 	public void setRecoveryInterval(Long recoveryInterval) {
 		this.recoveryBackOff = new FixedBackOff(recoveryInterval, FixedBackOff.UNLIMITED_ATTEMPTS);
@@ -207,7 +224,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 	/**
 	 * @param recoveryBackOff The BackOff to recover.
 	 * @since 1.5
-	 * @see SimpleMessageListenerContainer#setRecoveryBackOff(BackOff)
+	 * @see AbstractMessageListenerContainer#setRecoveryBackOff(BackOff)
 	 */
 	public void setRecoveryBackOff(BackOff recoveryBackOff) {
 		this.recoveryBackOff = recoveryBackOff;
@@ -215,7 +232,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	/**
 	 * @param missingQueuesFatal the missingQueuesFatal to set.
-	 * @see SimpleMessageListenerContainer#setMissingQueuesFatal
+	 * @see AbstractMessageListenerContainer#setMissingQueuesFatal
 	 */
 	public void setMissingQueuesFatal(Boolean missingQueuesFatal) {
 		this.missingQueuesFatal = missingQueuesFatal;
@@ -224,7 +241,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 	/**
 	 * @param mismatchedQueuesFatal the mismatchedQueuesFatal to set.
 	 * @since 1.6
-	 * @see SimpleMessageListenerContainer#setMismatchedQueuesFatal(boolean)
+	 * @see AbstractMessageListenerContainer#setMismatchedQueuesFatal(boolean)
 	 */
 	public void setMismatchedQueuesFatal(Boolean mismatchedQueuesFatal) {
 		this.mismatchedQueuesFatal = mismatchedQueuesFatal;
@@ -232,7 +249,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	/**
 	 * @param consumerTagStrategy the consumerTagStrategy to set
-	 * @see SimpleMessageListenerContainer#setConsumerTagStrategy(ConsumerTagStrategy)
+	 * @see AbstractMessageListenerContainer#setConsumerTagStrategy(ConsumerTagStrategy)
 	 */
 	public void setConsumerTagStrategy(ConsumerTagStrategy consumerTagStrategy) {
 		this.consumerTagStrategy = consumerTagStrategy;
@@ -287,93 +304,130 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 	}
 
 	/**
-	 * Set post processors that will be applied before sending replies.
+	 * Set post processors that will be applied before sending replies; added to each
+	 * message listener adapter.
 	 * @param beforeSendReplyPostProcessors the post processors.
 	 * @since 2.0.3
+	 * @see AbstractAdaptableMessageListener#setBeforeSendReplyPostProcessors(MessagePostProcessor...)
 	 */
 	public void setBeforeSendReplyPostProcessors(MessagePostProcessor... beforeSendReplyPostProcessors) {
 		this.beforeSendReplyPostProcessors = beforeSendReplyPostProcessors;
+	}
+
+	/**
+	 * Set a {@link RetryTemplate} to use when sending replies; added to each message
+	 * listener adapter.
+	 * @param retryTemplate the template.
+	 * @since 2.0.6
+	 * @see #setReplyRecoveryCallback(RecoveryCallback)
+	 * @see AbstractAdaptableMessageListener#setRetryTemplate(RetryTemplate)
+	 */
+	public void setRetryTemplate(RetryTemplate retryTemplate) {
+		this.retryTemplate = retryTemplate;
+	}
+
+	/**
+	 * Set a {@link RecoveryCallback} to invoke when retries are exhausted. Added to each
+	 * message listener adapter. Only used if a {@link #setRetryTemplate(RetryTemplate)
+	 * retryTemplate} is provided.
+	 * @param recoveryCallback the recovery callback.
+	 * @since 2.0.6
+	 * @see #setRetryTemplate(RetryTemplate)
+	 * @see AbstractAdaptableMessageListener#setRecoveryCallback(RecoveryCallback)
+	 */
+	public void setReplyRecoveryCallback(RecoveryCallback<?> recoveryCallback) {
+		this.recoveryCallback = recoveryCallback;
+	}
+
+	/**
+	 * A {@link Consumer} that is invoked to enable setting other container properties not
+	 * exposed  by this container factory.
+	 * @param configurer the configurer;
+	 * @since 2.1.1
+	 */
+	public void setContainerConfigurer(Consumer<C> configurer) {
+		this.containerConfigurer = configurer;
+	}
+
+	/**
+	 * Set to true to receive a list of debatched messages that were created by a
+	 * {@link org.springframework.amqp.rabbit.core.BatchingRabbitTemplate}.
+	 * @param isBatch true for a batch listener.
+	 * @since 2.2
+	 * @see #setBatchingStrategy(BatchingStrategy)
+	 */
+	public void setBatchListener(boolean isBatch) {
+		this.batchListener = isBatch;
+	}
+
+	/**
+	 * Set a {@link BatchingStrategy} to use when debatching messages.
+	 * @param batchingStrategy the batching strategy.
+	 * @since 2.2
+	 * @see #setBatchListener(boolean)
+	 */
+	public void setBatchingStrategy(BatchingStrategy batchingStrategy) {
+		this.batchingStrategy = batchingStrategy;
 	}
 
 	@Override
 	public C createListenerContainer(RabbitListenerEndpoint endpoint) {
 		C instance = createContainerInstance();
 
-		if (this.connectionFactory != null) {
-			instance.setConnectionFactory(this.connectionFactory);
+		JavaUtils javaUtils =
+				JavaUtils.INSTANCE
+						.acceptIfNotNull(this.connectionFactory, instance::setConnectionFactory)
+						.acceptIfNotNull(this.errorHandler, instance::setErrorHandler);
+		if (this.messageConverter != null && endpoint != null) {
+			endpoint.setMessageConverter(this.messageConverter);
 		}
-		if (this.errorHandler != null) {
-			instance.setErrorHandler(this.errorHandler);
+		javaUtils
+			.acceptIfNotNull(this.acknowledgeMode, instance::setAcknowledgeMode)
+			.acceptIfNotNull(this.channelTransacted, instance::setChannelTransacted)
+			.acceptIfNotNull(this.applicationContext, instance::setApplicationContext)
+			.acceptIfNotNull(this.taskExecutor, instance::setTaskExecutor)
+			.acceptIfNotNull(this.transactionManager, instance::setTransactionManager)
+			.acceptIfNotNull(this.prefetchCount, instance::setPrefetchCount)
+			.acceptIfNotNull(this.defaultRequeueRejected, instance::setDefaultRequeueRejected)
+			.acceptIfNotNull(this.adviceChain, instance::setAdviceChain)
+			.acceptIfNotNull(this.recoveryBackOff, instance::setRecoveryBackOff)
+			.acceptIfNotNull(this.mismatchedQueuesFatal, instance::setMismatchedQueuesFatal)
+			.acceptIfNotNull(this.missingQueuesFatal, instance::setMissingQueuesFatal)
+			.acceptIfNotNull(this.consumerTagStrategy, instance::setConsumerTagStrategy)
+			.acceptIfNotNull(this.idleEventInterval, instance::setIdleEventInterval)
+			.acceptIfNotNull(this.failedDeclarationRetryInterval, instance::setFailedDeclarationRetryInterval)
+			.acceptIfNotNull(this.applicationEventPublisher, instance::setApplicationEventPublisher)
+			.acceptIfNotNull(this.autoStartup, instance::setAutoStartup)
+			.acceptIfNotNull(this.phase, instance::setPhase)
+			.acceptIfNotNull(this.afterReceivePostProcessors, instance::setAfterReceivePostProcessors);
+		instance.setDeBatchingEnabled(!this.batchListener);
+		if (endpoint != null) { // endpoint settings overriding default factory settings
+			javaUtils
+				.acceptIfNotNull(endpoint.getAutoStartup(), instance::setAutoStartup)
+				.acceptIfNotNull(endpoint.getTaskExecutor(), instance::setTaskExecutor)
+				.acceptIfNotNull(endpoint.getAckMode(), instance::setAcknowledgeMode);
+			javaUtils
+				.acceptIfNotNull(this.batchingStrategy, endpoint::setBatchingStrategy);
+			instance.setListenerId(endpoint.getId());
+			endpoint.setBatchListener(this.batchListener);
+			endpoint.setupListenerContainer(instance);
 		}
-		if (this.messageConverter != null) {
-			instance.setMessageConverter(this.messageConverter);
-		}
-		if (this.acknowledgeMode != null) {
-			instance.setAcknowledgeMode(this.acknowledgeMode);
-		}
-		if (this.channelTransacted != null) {
-			instance.setChannelTransacted(this.channelTransacted);
-		}
-		if (this.applicationContext != null) {
-			instance.setApplicationContext(this.applicationContext);
-		}
-		if (this.taskExecutor != null) {
-			instance.setTaskExecutor(this.taskExecutor);
-		}
-		if (this.transactionManager != null) {
-			instance.setTransactionManager(this.transactionManager);
-		}
-		if (this.prefetchCount != null) {
-			instance.setPrefetchCount(this.prefetchCount);
-		}
-		if (this.defaultRequeueRejected != null) {
-			instance.setDefaultRequeueRejected(this.defaultRequeueRejected);
-		}
-		if (this.adviceChain != null) {
-			instance.setAdviceChain(this.adviceChain);
-		}
-		if (this.recoveryBackOff != null) {
-			instance.setRecoveryBackOff(this.recoveryBackOff);
-		}
-		if (this.mismatchedQueuesFatal != null) {
-			instance.setMismatchedQueuesFatal(this.mismatchedQueuesFatal);
-		}
-		if (this.missingQueuesFatal != null) {
-			instance.setMissingQueuesFatal(this.missingQueuesFatal);
-		}
-		if (this.consumerTagStrategy != null) {
-			instance.setConsumerTagStrategy(this.consumerTagStrategy);
-		}
-		if (this.idleEventInterval != null) {
-			instance.setIdleEventInterval(this.idleEventInterval);
-		}
-		if (this.failedDeclarationRetryInterval != null) {
-			instance.setFailedDeclarationRetryInterval(this.failedDeclarationRetryInterval);
-		}
-		if (this.applicationEventPublisher != null) {
-			instance.setApplicationEventPublisher(this.applicationEventPublisher);
-		}
-		if (endpoint.getAutoStartup() != null) {
-			instance.setAutoStartup(endpoint.getAutoStartup());
-		}
-		else if (this.autoStartup != null) {
-			instance.setAutoStartup(this.autoStartup);
-		}
-		if (this.phase != null) {
-			instance.setPhase(this.phase);
-		}
-		if (this.afterReceivePostProcessors != null) {
-			instance.setAfterReceivePostProcessors(this.afterReceivePostProcessors);
-		}
-		instance.setListenerId(endpoint.getId());
-
-		endpoint.setupListenerContainer(instance);
-		if (this.beforeSendReplyPostProcessors != null
-				&& instance.getMessageListener() instanceof AbstractAdaptableMessageListener) {
-			((AbstractAdaptableMessageListener) instance.getMessageListener())
-					.setBeforeSendReplyPostProcessors(this.beforeSendReplyPostProcessors);
+		if (instance.getMessageListener() instanceof AbstractAdaptableMessageListener) {
+			AbstractAdaptableMessageListener messageListener = (AbstractAdaptableMessageListener) instance
+					.getMessageListener();
+			javaUtils
+					.acceptIfNotNull(this.beforeSendReplyPostProcessors,
+							messageListener::setBeforeSendReplyPostProcessors)
+					.acceptIfNotNull(this.retryTemplate, messageListener::setRetryTemplate)
+					.acceptIfCondition(this.retryTemplate != null && this.recoveryCallback != null,
+							this.recoveryCallback,
+							messageListener::setRecoveryCallback);
 		}
 		initializeContainer(instance, endpoint);
+
+		if (this.containerConfigurer != null) {
+			this.containerConfigurer.accept(instance);
+		}
 
 		return instance;
 	}

@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +17,8 @@
 package org.springframework.amqp.core;
 
 import java.util.Properties;
+
+import org.springframework.lang.Nullable;
 
 
 /**
@@ -50,6 +52,7 @@ public interface AmqpAdmin {
 	 *
 	 * @return The queue.
 	 */
+	@Nullable
 	Queue declareQueue();
 
 	/**
@@ -57,6 +60,7 @@ public interface AmqpAdmin {
 	 * @param queue the queue to declare.
 	 * @return the name of the queue.
 	 */
+	@Nullable
 	String declareQueue(Queue queue);
 
 	/**
@@ -83,6 +87,14 @@ public interface AmqpAdmin {
 	 */
 	void purgeQueue(String queueName, boolean noWait);
 
+	/**
+	 * Purges the contents of the given queue.
+	 * @param queueName the name of the queue.
+	 * @return the number of messages purged.
+	 * @since 2.1
+	 */
+	int purgeQueue(String queueName);
+
 	// Binding operations
 
 	/**
@@ -103,6 +115,23 @@ public interface AmqpAdmin {
 	 * @param queueName the name of the queue.
 	 * @return the properties or null if the queue doesn't exist.
 	 */
+	@Nullable
 	Properties getQueueProperties(String queueName);
+
+	/**
+	 * Returns information about the queue, if it exists.
+	 * @param queueName the name of the queue.
+	 * @return the information or null if the queue doesn't exist.
+	 */
+	@Nullable
+	QueueInformation getQueueInfo(String queueName);
+
+	/**
+	 * Initialize the admin.
+	 * @since 2.1
+	 */
+	default void initialize() {
+		// no op
+	}
 
 }

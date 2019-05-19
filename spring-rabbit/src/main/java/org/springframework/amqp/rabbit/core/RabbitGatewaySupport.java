@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,6 +22,7 @@ import org.apache.commons.logging.LogFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.beans.factory.BeanInitializationException;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.lang.Nullable;
 
 /**
  * Convenient super class for application classes that need RabbitMQ access.
@@ -42,7 +43,7 @@ import org.springframework.beans.factory.InitializingBean;
 public class RabbitGatewaySupport implements InitializingBean {
 
 	/** Logger available to subclasses. */
-	protected final Log logger = LogFactory.getLog(getClass());
+	protected final Log logger = LogFactory.getLog(getClass()); // NOSONAR
 
 	private RabbitOperations rabbitOperations;
 
@@ -72,6 +73,7 @@ public class RabbitGatewaySupport implements InitializingBean {
 	/**
 	 * @return The Rabbit ConnectionFactory used by the gateway.
 	 */
+	@Nullable
 	public final ConnectionFactory getConnectionFactory() {
 		return (this.rabbitOperations != null ? this.rabbitOperations.getConnectionFactory() : null);
 	}
@@ -108,9 +110,8 @@ public class RabbitGatewaySupport implements InitializingBean {
 	/**
 	 * Subclasses can override this for custom initialization behavior.
 	 * Gets called after population of this instance's bean properties.
-	 * @throws java.lang.Exception if initialization fails
 	 */
-	protected void initGateway() throws Exception {
+	protected void initGateway() {
 	}
 
 }

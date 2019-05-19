@@ -4,10 +4,10 @@
 	xmlns:rabbit="http://www.springframework.org/schema/rabbit"
 	xmlns:util="http://www.springframework.org/schema/util"
 	xmlns:task="http://www.springframework.org/schema/task"
-	xsi:schemaLocation="http://www.springframework.org/schema/task http://www.springframework.org/schema/task/spring-task.xsd
-		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
-		http://www.springframework.org/schema/rabbit http://www.springframework.org/schema/rabbit/spring-rabbit.xsd
-		http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util.xsd">
+	xsi:schemaLocation="http://www.springframework.org/schema/task https://www.springframework.org/schema/task/spring-task.xsd
+		http://www.springframework.org/schema/beans https://www.springframework.org/schema/beans/spring-beans.xsd
+		http://www.springframework.org/schema/rabbit https://www.springframework.org/schema/rabbit/spring-rabbit.xsd
+		http://www.springframework.org/schema/util https://www.springframework.org/schema/util/spring-util.xsd">
 
 	<rabbit:queue name="foo" />
 
@@ -119,5 +119,15 @@
 	<task:scheduler id="sched" />
 
 	<task:executor id="exec" />
+
+	<rabbit:listener-container connection-factory="connectionFactory" auto-startup="false"
+							   after-receive-post-processors="unzipPostProcessor, gUnzipPostProcessor">
+		<rabbit:listener id="testMessagePostProcessor" queues="foo" ref="testBean" method="handle" />
+	</rabbit:listener-container>
+
+
+	<bean id="unzipPostProcessor" class="org.springframework.amqp.support.postprocessor.UnzipPostProcessor" />
+
+	<bean id="gUnzipPostProcessor" class="org.springframework.amqp.support.postprocessor.GUnzipPostProcessor" />
 
 </beans>

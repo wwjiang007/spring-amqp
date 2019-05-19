@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -33,7 +33,6 @@ import java.util.concurrent.TimeoutException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.junit.Assume;
-import org.junit.internal.AssumptionViolatedException;
 import org.junit.rules.TestWatcher;
 import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
@@ -77,9 +76,11 @@ import com.rabbitmq.http.client.Client;
  *
  * @since 1.7
  * @see Assume
- * @see AssumptionViolatedException
+ * @see org.junit.internal.AssumptionViolatedException
  */
 public final class BrokerRunning extends TestWatcher {
+
+	private static final int SIXTEEN = 16;
 
 	public static final String BROKER_ADMIN_URI = "RABBITMQ_TEST_ADMIN_URI";
 
@@ -99,15 +100,17 @@ public final class BrokerRunning extends TestWatcher {
 
 	private static final String DEFAULT_QUEUE_NAME = BrokerRunning.class.getName();
 
-	private static final Log logger = LogFactory.getLog(BrokerRunning.class);
+	private static final String GUEST = "guest";
+
+	private static final Log logger = LogFactory.getLog(BrokerRunning.class); // NOSONAR - lower case
 
 	// Static so that we only test once on failure: speeds up test suite
-	private static final Map<Integer, Boolean> brokerOnline = new HashMap<Integer, Boolean>();
+	private static final Map<Integer, Boolean> brokerOnline = new HashMap<Integer, Boolean>(); // NOSONAR - lower case
 
 	// Static so that we only test once on failure
-	private static final Map<Integer, Boolean> brokerOffline = new HashMap<Integer, Boolean>();
+	private static final Map<Integer, Boolean> brokerOffline = new HashMap<Integer, Boolean>(); // NOSONAR - lower case
 
-	private static final Map<String, String> environmentOverrides = new HashMap<>();
+	private static final Map<String, String> environmentOverrides = new HashMap<>(); // NOSONAR - lower case
 
 	private final boolean assumeOnline;
 
@@ -128,13 +131,13 @@ public final class BrokerRunning extends TestWatcher {
 
 	private ConnectionFactory connectionFactory;
 
-	private String user = fromEnvironment(BROKER_USER, "guest");
+	private String user = fromEnvironment(BROKER_USER, GUEST);
 
-	private String password = fromEnvironment(BROKER_PW, "guest");
+	private String password = fromEnvironment(BROKER_PW, GUEST);
 
-	private String adminUser = fromEnvironment(BROKER_ADMIN_USER, "guest");
+	private String adminUser = fromEnvironment(BROKER_ADMIN_USER, GUEST);
 
-	private String adminPassword = fromEnvironment(BROKER_ADMIN_PW, "guest");
+	private String adminPassword = fromEnvironment(BROKER_ADMIN_PW, GUEST);
 
 	private String fromEnvironment(String key, String defaultValue) {
 		String environmentValue = environmentOverrides.get(key);
@@ -363,13 +366,11 @@ public final class BrokerRunning extends TestWatcher {
 			Assume.assumeTrue(brokerOffline.get(this.port));
 		}
 
-		ConnectionFactory connectionFactory = getConnectionFactory();
-
 		Connection connection = null; // NOSONAR (closeResources())
 		Channel channel = null;
 
 		try {
-			connection = getConnection(connectionFactory);
+			connection = getConnection(getConnectionFactory());
 			channel = createQueues(connection);
 		}
 		catch (Exception e) {
@@ -391,8 +392,8 @@ public final class BrokerRunning extends TestWatcher {
 		return super.apply(base, description);
 	}
 
-	public void isUp() throws Exception {
-		Connection connection = getConnectionFactory().newConnection();
+	public void isUp() throws IOException, TimeoutException, URISyntaxException {
+		Connection connection = getConnectionFactory().newConnection(); // NOSONAR - closeResources()
 		Channel channel = null;
 		try {
 			channel = createQueues(connection);
@@ -436,7 +437,7 @@ public final class BrokerRunning extends TestWatcher {
 		if (this.management) {
 			Client client = new Client(getAdminUri(), this.adminUser, this.adminPassword);
 			if (!client.alivenessTest("/")) {
-				throw new RuntimeException("Aliveness test failed for localhost:15672 guest/quest; "
+				throw new BrokerNotAliveException("Aliveness test failed for localhost:15672 guest/quest; "
 						+ "management not available");
 			}
 		}
@@ -461,7 +462,7 @@ public final class BrokerRunning extends TestWatcher {
 	 */
 	public String generateId() {
 		UUID uuid = UUID.randomUUID();
-		ByteBuffer bb = ByteBuffer.wrap(new byte[16]);
+		ByteBuffer bb = ByteBuffer.wrap(new byte[SIXTEEN]);
 		bb.putLong(uuid.getMostSignificantBits())
 		  .putLong(uuid.getLeastSignificantBits());
 		return "SpringBrokerRunning." + Base64Utils.encodeToUrlSafeString(bb.array()).replaceAll("=", "");
@@ -484,12 +485,11 @@ public final class BrokerRunning extends TestWatcher {
 			queuesToRemove.addAll(Arrays.asList(additionalQueues));
 		}
 		logger.debug("deleting test queues: " + queuesToRemove);
-		ConnectionFactory connectionFactory = getConnectionFactory();
 		Connection connection = null; // NOSONAR (closeResources())
 		Channel channel = null;
 
 		try {
-			connection = getConnection(connectionFactory);
+			connection = getConnection(getConnectionFactory());
 			connection.setId(generateId() + ".queueDelete");
 			channel = connection.createChannel();
 
@@ -510,12 +510,11 @@ public final class BrokerRunning extends TestWatcher {
 	 * @param queues the queues to delete.
 	 */
 	public void deleteQueues(String... queues) {
-		ConnectionFactory connectionFactory = getConnectionFactory();
 		Connection connection = null; // NOSONAR (closeResources())
 		Channel channel = null;
 
 		try {
-			connection = getConnection(connectionFactory);
+			connection = getConnection(getConnectionFactory());
 			connection.setId(generateId() + ".queueDelete");
 			channel = connection.createChannel();
 
@@ -536,12 +535,11 @@ public final class BrokerRunning extends TestWatcher {
 	 * @param exchanges the exchanges to delete.
 	 */
 	public void deleteExchanges(String... exchanges) {
-		ConnectionFactory connectionFactory = getConnectionFactory();
 		Connection connection = null; // NOSONAR (closeResources())
 		Channel channel = null;
 
 		try {
-			connection = getConnection(connectionFactory);
+			connection = getConnection(getConnectionFactory());
 			connection.setId(generateId() + ".exchangeDelete");
 			channel = connection.createChannel();
 
@@ -612,6 +610,20 @@ public final class BrokerRunning extends TestWatcher {
 				// Ignore
 			}
 		}
+	}
+
+	/**
+	 * The {@link RuntimeException} thrown when broker is not available
+	 * on the provided host port.
+	 */
+	public static class BrokerNotAliveException extends RuntimeException {
+
+		private static final long serialVersionUID = 1L;
+
+		BrokerNotAliveException(String message) {
+			super(message);
+		}
+
 	}
 
 }
