@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.fail;
 import java.io.Serializable;
 import java.util.Collections;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
@@ -33,29 +33,29 @@ import org.springframework.util.Assert;
  * @since 1.5.5
  *
  */
-public class WhiteListDeserializingMessageConverterTests {
+public class AllowedListDeserializingMessageConverterTests {
 
 	@Test
-	public void testWhiteList() throws Exception {
+	public void testAllowedList() throws Exception {
 		SerializerMessageConverter converter = new SerializerMessageConverter();
 		TestBean testBean = new TestBean("foo");
 		Message message = converter.toMessage(testBean, new MessageProperties());
 		Object fromMessage = converter.fromMessage(message);
 		assertThat(fromMessage).isEqualTo(testBean);
 
-		converter.setWhiteListPatterns(Collections.singletonList("*"));
+		converter.setAllowedListPatterns(Collections.singletonList("*"));
 		fromMessage = converter.fromMessage(message);
 		assertThat(fromMessage).isEqualTo(testBean);
 
-		converter.setWhiteListPatterns(Collections.singletonList("org.springframework.amqp.*"));
+		converter.setAllowedListPatterns(Collections.singletonList("org.springframework.amqp.*"));
 		fromMessage = converter.fromMessage(message);
 		assertThat(fromMessage).isEqualTo(testBean);
-		converter.setWhiteListPatterns(Collections.singletonList("*$TestBean"));
+		converter.setAllowedListPatterns(Collections.singletonList("*$TestBean"));
 		fromMessage = converter.fromMessage(message);
 		assertThat(fromMessage).isEqualTo(testBean);
 
 		try {
-			converter.setWhiteListPatterns(Collections.singletonList("foo.*"));
+			converter.setAllowedListPatterns(Collections.singletonList("foo.*"));
 			fromMessage = converter.fromMessage(message);
 			assertThat(fromMessage).isEqualTo(testBean);
 			fail("Expected SecurityException");

@@ -23,11 +23,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.util.Map;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
-import org.mockito.junit.MockitoJUnitRunner;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import org.springframework.amqp.core.AmqpTemplate;
 import org.springframework.amqp.core.Message;
@@ -41,7 +41,7 @@ import org.springframework.amqp.core.MessageProperties;
  *
  * @since 1.3
  */
-@RunWith(MockitoJUnitRunner.class)
+@ExtendWith(MockitoExtension.class)
 public class RepublishMessageRecovererTest {
 
 	private final Message message = new Message("".getBytes(), new MessageProperties());
@@ -53,13 +53,13 @@ public class RepublishMessageRecovererTest {
 
 	private RepublishMessageRecoverer recoverer;
 
-	@Before
-	public void beforeEach() {
+	@BeforeEach
+	void beforeEach() {
 		message.getMessageProperties().setReceivedRoutingKey("some.key");
 	}
 
 	@Test
-	public void shouldPublishWithRoutingKeyPrefixedWithErrorWhenExchangeIsNotSet() {
+	void shouldPublishWithRoutingKeyPrefixedWithErrorWhenExchangeIsNotSet() {
 		recoverer = new RepublishMessageRecoverer(amqpTemplate);
 		recoverer.recover(message, cause);
 
@@ -67,7 +67,15 @@ public class RepublishMessageRecovererTest {
 	}
 
 	@Test
-	public void shouldPublishWithSetErrorRoutingKeyWhenExchangeAndErrorRoutingKeyProvided() {
+	void nullCauseMessage() {
+		recoverer = new RepublishMessageRecoverer(amqpTemplate);
+		recoverer.recover(message, new RuntimeException(new RuntimeException()));
+
+		verify(amqpTemplate).send("error.some.key", message);
+	}
+
+	@Test
+	void shouldPublishWithSetErrorRoutingKeyWhenExchangeAndErrorRoutingKeyProvided() {
 		recoverer = new RepublishMessageRecoverer(amqpTemplate, "errorExchange", "errorRoutingKey");
 		recoverer.recover(message, cause);
 
@@ -75,7 +83,7 @@ public class RepublishMessageRecovererTest {
 	}
 
 	@Test
-	public void shouldPublishToProvidedExchange() {
+	void shouldPublishToProvidedExchange() {
 		recoverer = new RepublishMessageRecoverer(amqpTemplate, "error");
 
 		recoverer.recover(message, cause);
@@ -84,7 +92,7 @@ public class RepublishMessageRecovererTest {
 	}
 
 	@Test
-	public void shouldIncludeTheStacktraceInTheHeaderOfThePublishedMessage() {
+	void shouldIncludeTheStacktraceInTheHeaderOfThePublishedMessage() {
 		recoverer = new RepublishMessageRecoverer(amqpTemplate);
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		cause.printStackTrace(new PrintStream(baos));
@@ -96,7 +104,7 @@ public class RepublishMessageRecovererTest {
 	}
 
 	@Test
-	public void shouldIncludeTheCauseMessageInTheHeaderOfThePublishedMessage() {
+	void shouldIncludeTheCauseMessageInTheHeaderOfThePublishedMessage() {
 		recoverer = new RepublishMessageRecoverer(amqpTemplate);
 		recoverer.recover(message, cause);
 
@@ -104,7 +112,7 @@ public class RepublishMessageRecovererTest {
 	}
 
 	@Test
-	public void shouldSetTheOriginalMessageExchangeOnInTheHeaders() {
+	void shouldSetTheOriginalMessageExchangeOnInTheHeaders() {
 		message.getMessageProperties().setReceivedExchange("the.original.exchange");
 		recoverer = new RepublishMessageRecoverer(amqpTemplate, "error");
 
@@ -114,11 +122,12 @@ public class RepublishMessageRecovererTest {
 	}
 
 	@Test
-	public void shouldRemapDeliveryMode() {
+	void shouldRemapDeliveryMode() {
 		message.getMessageProperties().setDeliveryMode(null);
 		message.getMessageProperties().setReceivedDeliveryMode(MessageDeliveryMode.PERSISTENT);
 		recoverer = new RepublishMessageRecoverer(amqpTemplate, "error") {
 
+			@Override
 			protected Map<? extends String, ? extends Object> additionalHeaders(Message message, Throwable cause) {
 				message.getMessageProperties().setDeliveryMode(message.getMessageProperties().getReceivedDeliveryMode());
 				return null;
@@ -132,7 +141,7 @@ public class RepublishMessageRecovererTest {
 	}
 
 	@Test
-	public void setDeliveryModeIfNull() {
+	void setDeliveryModeIfNull() {
 		this.message.getMessageProperties().setDeliveryMode(null);
 		this.recoverer = new RepublishMessageRecoverer(amqpTemplate, "error");
 

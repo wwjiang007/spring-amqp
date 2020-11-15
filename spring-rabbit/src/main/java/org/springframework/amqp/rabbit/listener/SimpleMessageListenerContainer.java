@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,9 @@ import org.springframework.amqp.AmqpIOException;
 import org.springframework.amqp.AmqpIllegalStateException;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.ImmediateAcknowledgeAmqpException;
+import org.springframework.amqp.core.BatchMessageListener;
 import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactoryUtils;
@@ -46,14 +48,18 @@ import org.springframework.amqp.rabbit.connection.ConsumerChannelRegistry;
 import org.springframework.amqp.rabbit.connection.RabbitResourceHolder;
 import org.springframework.amqp.rabbit.connection.RabbitUtils;
 import org.springframework.amqp.rabbit.connection.SimpleResourceHolder;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareBatchMessageListener;
 import org.springframework.amqp.rabbit.listener.exception.FatalListenerExecutionException;
 import org.springframework.amqp.rabbit.listener.exception.FatalListenerStartupException;
+import org.springframework.amqp.rabbit.support.ActiveObjectCounter;
 import org.springframework.amqp.rabbit.support.ConsumerCancelledException;
 import org.springframework.amqp.rabbit.support.ListenerContainerAware;
 import org.springframework.amqp.rabbit.support.ListenerExecutionFailedException;
 import org.springframework.amqp.rabbit.support.RabbitExceptionTranslator;
+import org.springframework.amqp.support.ConsumerTagStrategy;
 import org.springframework.jmx.export.annotation.ManagedMetric;
 import org.springframework.jmx.support.MetricType;
+import org.springframework.lang.Nullable;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -96,29 +102,23 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 
 	private final BlockingQueue<ListenerContainerConsumerFailedEvent> abortEvents = new LinkedBlockingQueue<>();
 
-	private volatile long startConsumerMinInterval = DEFAULT_START_CONSUMER_MIN_INTERVAL;
+	private final ActiveObjectCounter<BlockingQueueConsumer> cancellationLock = new ActiveObjectCounter<>();
 
-	private volatile long stopConsumerMinInterval = DEFAULT_STOP_CONSUMER_MIN_INTERVAL;
+	private long startConsumerMinInterval = DEFAULT_START_CONSUMER_MIN_INTERVAL;
 
-	private volatile int consecutiveActiveTrigger = DEFAULT_CONSECUTIVE_ACTIVE_TRIGGER;
+	private long stopConsumerMinInterval = DEFAULT_STOP_CONSUMER_MIN_INTERVAL;
 
-	private volatile int consecutiveIdleTrigger = DEFAULT_CONSECUTIVE_IDLE_TRIGGER;
+	private int consecutiveActiveTrigger = DEFAULT_CONSECUTIVE_ACTIVE_TRIGGER;
 
-	private volatile int txSize = 1;
+	private int consecutiveIdleTrigger = DEFAULT_CONSECUTIVE_IDLE_TRIGGER;
 
-	private volatile int concurrentConsumers = 1;
+	private int batchSize = 1;
 
-	private volatile Integer maxConcurrentConsumers;
-
-	private volatile long lastConsumerStarted;
-
-	private volatile long lastConsumerStopped;
+	private boolean consumerBatchEnabled;
 
 	private long receiveTimeout = DEFAULT_RECEIVE_TIMEOUT;
 
 	private Set<BlockingQueueConsumer> consumers;
-
-	private final ActiveObjectCounter<BlockingQueueConsumer> cancellationLock = new ActiveObjectCounter<>();
 
 	private Integer declarationRetries;
 
@@ -127,6 +127,14 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 	private TransactionTemplate transactionTemplate;
 
 	private long consumerStartTimeout = DEFAULT_CONSUMER_START_TIMEOUT;
+
+	private volatile int concurrentConsumers = 1;
+
+	private volatile Integer maxConcurrentConsumers;
+
+	private volatile long lastConsumerStarted;
+
+	private volatile long lastConsumerStopped;
 
 	/**
 	 * Default constructor for convenient dependency injection via setters.
@@ -211,9 +219,14 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 		try {
 			int separatorIndex = concurrency.indexOf('-');
 			if (separatorIndex != -1) {
-				setConcurrentConsumers(Integer.parseInt(concurrency.substring(0, separatorIndex)));
-				setMaxConcurrentConsumers(
-						Integer.parseInt(concurrency.substring(separatorIndex + 1, concurrency.length())));
+				int consumersToSet = Integer.parseInt(concurrency.substring(0, separatorIndex));
+				int maxConsumersToSet = Integer.parseInt(concurrency.substring(separatorIndex + 1));
+				Assert.isTrue(maxConsumersToSet >= consumersToSet,
+						"'maxConcurrentConsumers' value must be at least 'concurrentConsumers'");
+				this.concurrentConsumers = 1;
+				this.maxConcurrentConsumers = null;
+				setConcurrentConsumers(consumersToSet);
+				setMaxConcurrentConsumers(maxConsumersToSet);
 			}
 			else {
 				setConcurrentConsumers(Integer.parseInt(concurrency));
@@ -270,12 +283,12 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 	 * {@link #maxConcurrentConsumers} has not been reached, specifies the number of
 	 * consecutive cycles when a single consumer was active, in order to consider
 	 * starting a new consumer. If the consumer goes idle for one cycle, the counter is reset.
-	 * This is impacted by the {@link #txSize}.
+	 * This is impacted by the {@link #batchSize}.
 	 * Default is 10 consecutive messages.
 	 * @param consecutiveActiveTrigger The number of consecutive receives to trigger a new consumer.
 	 * @see #setMaxConcurrentConsumers(int)
 	 * @see #setStartConsumerMinInterval(long)
-	 * @see #setTxSize(int)
+	 * @see #setBatchSize(int)
 	 */
 	public final void setConsecutiveActiveTrigger(int consecutiveActiveTrigger) {
 		Assert.isTrue(consecutiveActiveTrigger > 0, "'consecutiveActiveTrigger' must be > 0");
@@ -287,14 +300,14 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 	 * the number of consumers exceeds {@link #concurrentConsumers}, specifies the
 	 * number of consecutive receive attempts that return no data; after which we consider
 	 * stopping a consumer. The idle time is effectively
-	 * {@link #receiveTimeout} * {@link #txSize} * this value because the consumer thread waits for
-	 * a message for up to {@link #receiveTimeout} up to {@link #txSize} times.
+	 * {@link #receiveTimeout} * {@link #batchSize} * this value because the consumer thread waits for
+	 * a message for up to {@link #receiveTimeout} up to {@link #batchSize} times.
 	 * Default is 10 consecutive idles.
 	 * @param consecutiveIdleTrigger The number of consecutive timeouts to trigger stopping a consumer.
 	 * @see #setMaxConcurrentConsumers(int)
 	 * @see #setStopConsumerMinInterval(long)
 	 * @see #setReceiveTimeout(long)
-	 * @see #setTxSize(int)
+	 * @see #setBatchSize(int)
 	 */
 	public final void setConsecutiveIdleTrigger(int consecutiveIdleTrigger) {
 		Assert.isTrue(consecutiveIdleTrigger > 0, "'consecutiveIdleTrigger' must be > 0");
@@ -312,16 +325,51 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 	}
 
 	/**
-	 * Tells the container how many messages to process in a single transaction (if the
-	 * channel is transactional). For best results it should be less than or equal to
-	 * {@link #setPrefetchCount(int) the prefetch count}. Also affects how often acks are
-	 * sent when using {@link org.springframework.amqp.core.AcknowledgeMode#AUTO} - one
-	 * ack per txSize. Default is 1.
-	 * @param txSize the transaction size
+	 * This property has several functions.
+	 * <p>
+	 * When the channel is transacted, it determines how many messages to process in a
+	 * single transaction. It should be less than or equal to
+	 * {@link #setPrefetchCount(int) the prefetch count}.
+	 * <p>
+	 * It also affects how often acks are sent when using
+	 * {@link org.springframework.amqp.core.AcknowledgeMode#AUTO} - one ack per BatchSize.
+	 * <p>
+	 * Finally, when {@link #setConsumerBatchEnabled(boolean)} is true, it determines how
+	 * many records to include in the batch as long as sufficient messages arrive within
+	 * {@link #setReceiveTimeout(long)}.
+	 * <p>
+	 * <b>IMPORTANT</b> The batch size represents the number of physical messages
+	 * received. If {@link #setDeBatchingEnabled(boolean)} is true and a message is a
+	 * batch created by a producer, the actual number of messages received by the listener
+	 * will be larger than this batch size.
+	 * <p>
+	 *
+	 * Default is 1.
+	 * @param batchSize the batch size
+	 * @since 2.2
+	 * @see #setConsumerBatchEnabled(boolean)
+	 * @see #setDeBatchingEnabled(boolean)
 	 */
-	public void setTxSize(int txSize) {
-		Assert.isTrue(txSize > 0, "'txSize' must be > 0");
-		this.txSize = txSize;
+	public void setBatchSize(int batchSize) {
+		Assert.isTrue(batchSize > 0, "'batchSize' must be > 0");
+		this.batchSize = batchSize;
+	}
+
+	/**
+	 * Set to true to present a list of messages based on the {@link #setBatchSize(int)},
+	 * if the listener supports it. This will coerce {@link #setDeBatchingEnabled(boolean)
+	 * deBatchingEnabled} to true as well.
+	 * @param consumerBatchEnabled true to create message batches in the container.
+	 * @since 2.2
+	 * @see #setBatchSize(int)
+	 */
+	public void setConsumerBatchEnabled(boolean consumerBatchEnabled) {
+		this.consumerBatchEnabled = consumerBatchEnabled;
+	}
+
+	@Override
+	public boolean isConsumerBatchEnabled() {
+		return this.consumerBatchEnabled;
 	}
 
 	/**
@@ -351,9 +399,8 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 	 * @param queueName The queue to add.
 	 */
 	@Override
-	public void addQueueNames(String... queueName) {
-		super.addQueueNames(queueName);
-		queuesChanged();
+	public void addQueueNames(String... queueName) { // NOSONAR - extra javadocs
+		super.addQueueNames(queueName); // calls addQueues() which will cycle consumers
 	}
 
 	/**
@@ -466,7 +513,9 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 
 	@Override
 	protected void doInitialize() {
-
+		if (this.consumerBatchEnabled) {
+			setDeBatchingEnabled(true);
+		}
 	}
 
 	@ManagedMetric(metricType = MetricType.GAUGE)
@@ -480,6 +529,9 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 	 */
 	@Override
 	protected void doStart() {
+		Assert.state(!this.consumerBatchEnabled || getMessageListener() instanceof BatchMessageListener
+				|| getMessageListener() instanceof ChannelAwareBatchMessageListener,
+				"When setting 'consumerBatchEnabled' to true, the listener must support batching");
 		checkListenerContainerAware();
 		super.doStart();
 		synchronized (this.consumersMonitor) {
@@ -622,8 +674,11 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 			if (this.consumers == null) {
 				this.cancellationLock.reset();
 				this.consumers = new HashSet<BlockingQueueConsumer>(this.concurrentConsumers);
-				for (int i = 0; i < this.concurrentConsumers; i++) {
+				for (int i = 1; i <= this.concurrentConsumers; i++) {
 					BlockingQueueConsumer consumer = createBlockingQueueConsumer();
+					if (getConsumeDelay() > 0) {
+						consumer.setConsumeDelay(getConsumeDelay() * i);
+					}
 					this.consumers.add(consumer);
 					count++;
 				}
@@ -747,7 +802,13 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 					consumerIterator.remove();
 					count++;
 				}
-				this.addAndStartConsumers(count);
+				try {
+					this.cancellationLock.await(getShutdownTimeout(), TimeUnit.MILLISECONDS);
+				}
+				catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				addAndStartConsumers(count);
 			}
 		}
 	}
@@ -757,7 +818,7 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 		String[] queues = getQueueNames();
 		// There's no point prefetching less than the tx size, otherwise the consumer will stall because the broker
 		// didn't get an ack for delivered messages
-		int actualPrefetchCount = getPrefetchCount() > this.txSize ? getPrefetchCount() : this.txSize;
+		int actualPrefetchCount = getPrefetchCount() > this.batchSize ? getPrefetchCount() : this.batchSize;
 		consumer = new BlockingQueueConsumer(getConnectionFactory(), getMessagePropertiesConverter(),
 				this.cancellationLock, getAcknowledgeMode(), isChannelTransacted(), actualPrefetchCount,
 				isDefaultRequeueRejected(), getConsumerArguments(), isNoLocal(), isExclusive(), queues);
@@ -770,8 +831,9 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 		if (this.retryDeclarationInterval != null) {
 			consumer.setRetryDeclarationInterval(this.retryDeclarationInterval);
 		}
-		if (getConsumerTagStrategy() != null) {
-			consumer.setTagStrategy(getConsumerTagStrategy()); // NOSONAR never null here
+		ConsumerTagStrategy consumerTagStrategy = getConsumerTagStrategy();
+		if (consumerTagStrategy != null) {
+			consumer.setTagStrategy(consumerTagStrategy);
 		}
 		consumer.setBackOffExecution(getRecoveryBackOff().start());
 		consumer.setShutdownTimeout(getShutdownTimeout());
@@ -855,64 +917,157 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 
 		Channel channel = consumer.getChannel();
 
-		for (int i = 0; i < this.txSize; i++) {
+		List<Message> messages = null;
+		long deliveryTag = 0;
+
+		for (int i = 0; i < this.batchSize; i++) {
 
 			logger.trace("Waiting for message from consumer.");
 			Message message = consumer.nextMessage(this.receiveTimeout);
 			if (message == null) {
 				break;
 			}
-			try {
-				executeListener(channel, message);
-			}
-			catch (ImmediateAcknowledgeAmqpException e) {
-				if (this.logger.isDebugEnabled()) {
-					this.logger.debug("User requested ack for failed delivery '"
-							+ e.getMessage() + "': "
-							+ message.getMessageProperties().getDeliveryTag());
+			if (this.consumerBatchEnabled) {
+				Collection<MessagePostProcessor> afterReceivePostProcessors = getAfterReceivePostProcessors();
+				if (afterReceivePostProcessors != null) {
+					Message original = message;
+					deliveryTag = message.getMessageProperties().getDeliveryTag();
+					for (MessagePostProcessor processor : getAfterReceivePostProcessors()) {
+						message = processor.postProcessMessage(message);
+						if (message == null) {
+							channel.basicAck(deliveryTag, false);
+							if (this.logger.isDebugEnabled()) {
+								this.logger.debug(
+										"Message Post Processor returned 'null', discarding message " + original);
+							}
+							break;
+						}
+					}
 				}
-				break;
+				if (message != null) {
+					if (messages == null) {
+						messages = new ArrayList<>(this.batchSize);
+					}
+					if (isDeBatchingEnabled() && getBatchingStrategy().canDebatch(message.getMessageProperties())) {
+						final List<Message> messageList = messages;
+						getBatchingStrategy().deBatch(message, fragment -> messageList.add(fragment));
+					}
+					else {
+						messages.add(message);
+					}
+				}
 			}
-			catch (Exception ex) {
-				if (causeChainHasImmediateAcknowledgeAmqpException(ex)) {
+			else {
+				messages = debatch(message);
+				if (messages != null) {
+					break;
+				}
+				try {
+					executeListener(channel, message);
+				}
+				catch (ImmediateAcknowledgeAmqpException e) {
 					if (this.logger.isDebugEnabled()) {
-						this.logger.debug("User requested ack for failed delivery: "
+						this.logger.debug("User requested ack for failed delivery '"
+								+ e.getMessage() + "': "
 								+ message.getMessageProperties().getDeliveryTag());
 					}
 					break;
 				}
-				if (getTransactionManager() != null) {
-					if (getTransactionAttribute().rollbackOn(ex)) {
-						RabbitResourceHolder resourceHolder = (RabbitResourceHolder) TransactionSynchronizationManager
-								.getResource(getConnectionFactory());
-						if (resourceHolder != null) {
-							consumer.clearDeliveryTags();
-						}
-						else {
-							/*
-							 * If we don't actually have a transaction, we have to roll back
-							 * manually. See prepareHolderForRollback().
-							 */
-							consumer.rollbackOnExceptionIfNecessary(ex);
-						}
-						throw ex; // encompassing transaction will handle the rollback.
-					}
-					else {
+				catch (Exception ex) {
+					if (causeChainHasImmediateAcknowledgeAmqpException(ex)) {
 						if (this.logger.isDebugEnabled()) {
-							this.logger.debug("No rollback for " + ex);
+							this.logger.debug("User requested ack for failed delivery: "
+									+ message.getMessageProperties().getDeliveryTag());
 						}
 						break;
 					}
-				}
-				else {
-					consumer.rollbackOnExceptionIfNecessary(ex);
-					throw ex;
+					if (getTransactionManager() != null) {
+						if (getTransactionAttribute().rollbackOn(ex)) {
+							RabbitResourceHolder resourceHolder = (RabbitResourceHolder) TransactionSynchronizationManager
+									.getResource(getConnectionFactory());
+							if (resourceHolder != null) {
+								consumer.clearDeliveryTags();
+							}
+							else {
+								/*
+								 * If we don't actually have a transaction, we have to roll back
+								 * manually. See prepareHolderForRollback().
+								 */
+								consumer.rollbackOnExceptionIfNecessary(ex);
+							}
+							throw ex; // encompassing transaction will handle the rollback.
+						}
+						else {
+							if (this.logger.isDebugEnabled()) {
+								this.logger.debug("No rollback for " + ex);
+							}
+							break;
+						}
+					}
+					else {
+						consumer.rollbackOnExceptionIfNecessary(ex);
+						throw ex;
+					}
 				}
 			}
+		}
+		if (messages != null) {
+			executeWithList(channel, messages, deliveryTag, consumer);
 		}
 
 		return consumer.commitIfNecessary(isChannelLocallyTransacted());
 
+	}
+
+	private void executeWithList(Channel channel, List<Message> messages, long deliveryTag,
+			BlockingQueueConsumer consumer) {
+
+		try {
+			executeListener(channel, messages);
+		}
+		catch (ImmediateAcknowledgeAmqpException e) {
+			if (this.logger.isDebugEnabled()) {
+				this.logger.debug("User requested ack for failed delivery '"
+						+ e.getMessage() + "' (last in batch): "
+						+ deliveryTag);
+			}
+			return;
+		}
+		catch (Exception ex) {
+			if (causeChainHasImmediateAcknowledgeAmqpException(ex)) {
+				if (this.logger.isDebugEnabled()) {
+					this.logger.debug("User requested ack for failed delivery (last in batch): "
+							+ deliveryTag);
+				}
+				return;
+			}
+			if (getTransactionManager() != null) {
+				if (getTransactionAttribute().rollbackOn(ex)) {
+					RabbitResourceHolder resourceHolder = (RabbitResourceHolder) TransactionSynchronizationManager
+							.getResource(getConnectionFactory());
+					if (resourceHolder != null) {
+						consumer.clearDeliveryTags();
+					}
+					else {
+						/*
+						 * If we don't actually have a transaction, we have to roll back
+						 * manually. See prepareHolderForRollback().
+						 */
+						consumer.rollbackOnExceptionIfNecessary(ex);
+					}
+					throw ex; // encompassing transaction will handle the rollback.
+				}
+				else {
+					if (this.logger.isDebugEnabled()) {
+						this.logger.debug("No rollback for " + ex);
+					}
+				}
+			}
+			else {
+				consumer.rollbackOnExceptionIfNecessary(ex);
+				throw ex;
+			}
+		}
 	}
 
 	protected void handleStartupFailure(BackOffExecution backOffExecution) {
@@ -942,7 +1097,7 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 	}
 
 	@Override
-	protected void publishConsumerFailedEvent(String reason, boolean fatal, Throwable t) {
+	protected void publishConsumerFailedEvent(String reason, boolean fatal, @Nullable Throwable t) {
 		if (!fatal || !isRunning()) {
 			super.publishConsumerFailedEvent(reason, fatal, t);
 		}
@@ -1045,7 +1200,7 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 				publishConsumerFailedEvent("Consumer thread interrupted, processing stopped", true, e);
 			}
 			catch (QueuesNotAvailableException ex) {
-				logger.error("Consumer received fatal=" + isMismatchedQueuesFatal() + " exception on startup", ex);
+				logger.error("Consumer threw missing queues exception, fatal=" + isMissingQueuesFatal(), ex);
 				if (isMissingQueuesFatal()) {
 					this.startupException = ex;
 					// Fatal, but no point re-throwing, so just abort.
@@ -1100,9 +1255,9 @@ public class SimpleMessageListenerContainer extends AbstractMessageListenerConta
 				}
 			}
 			catch (Error e) { //NOSONAR
-				// ok to catch Error - we're aborting so will stop
 				logger.error("Consumer thread error, thread abort.", e);
 				publishConsumerFailedEvent("Consumer threw an Error", true, e);
+				getJavaLangErrorHandler().handle(e);
 				aborted = true;
 			}
 			catch (Throwable t) { //NOSONAR

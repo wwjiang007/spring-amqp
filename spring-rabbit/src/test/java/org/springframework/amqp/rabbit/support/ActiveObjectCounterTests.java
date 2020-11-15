@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.springframework.amqp.rabbit.listener;
+package org.springframework.amqp.rabbit.support;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -22,8 +22,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.Test;
-
+import org.junit.jupiter.api.Test;
 
 /**
  * @author Dave Syer

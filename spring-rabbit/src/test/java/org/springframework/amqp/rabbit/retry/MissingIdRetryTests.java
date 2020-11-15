@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.springframework.amqp.rabbit.retry;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.atMost;
@@ -34,12 +35,9 @@ import java.util.concurrent.TimeUnit;
 import org.aopalliance.aop.Advice;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.logging.log4j.Level;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.ClassRule;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import org.springframework.amqp.core.Message;
@@ -47,11 +45,12 @@ import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.config.StatefulRetryOperationsInterceptorFactoryBean;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.junit.BrokerRunning;
+import org.springframework.amqp.rabbit.junit.LogLevels;
+import org.springframework.amqp.rabbit.junit.RabbitAvailable;
+import org.springframework.amqp.rabbit.junit.RabbitAvailableCondition;
 import org.springframework.amqp.rabbit.listener.BlockingQueueConsumer;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
-import org.springframework.amqp.rabbit.test.LogLevelAdjuster;
 import org.springframework.beans.DirectFieldAccessor;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.support.ClassPathXmlApplicationContext;
@@ -67,25 +66,21 @@ import org.springframework.retry.support.RetryTemplate;
  * @since 1.1.2
  *
  */
+@RabbitAvailable
+@LogLevels(classes = {BlockingQueueConsumer.class,
+		MissingIdRetryTests.class,
+		RetryTemplate.class, SimpleRetryPolicy.class})
 public class MissingIdRetryTests {
 
 	private final Log logger = LogFactory.getLog(MissingIdRetryTests.class);
 
 	private volatile CountDownLatch latch;
 
-	@ClassRule
-	public static BrokerRunning brokerIsRunning = BrokerRunning.isRunning();
-
-	@Rule
-	public LogLevelAdjuster adjuster = new LogLevelAdjuster(Level.DEBUG, BlockingQueueConsumer.class,
-			MissingIdRetryTests.class,
-			RetryTemplate.class, SimpleRetryPolicy.class);
-
-	@BeforeClass
-	@AfterClass
+	@BeforeAll
+	@AfterAll
 	public static void setupAndCleanUp() {
-		brokerIsRunning.deleteQueues("retry.test.queue");
-		brokerIsRunning.deleteExchanges("retry.test.exchange");
+		RabbitAvailableCondition.getBrokerRunning().deleteQueues("retry.test.queue");
+		RabbitAvailableCondition.getBrokerRunning().deleteExchanges("retry.test.exchange");
 	}
 
 	@SuppressWarnings({ "rawtypes", "unchecked" })
@@ -118,13 +113,9 @@ public class MissingIdRetryTests {
 		try {
 			assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
 			Map map = (Map) new DirectFieldAccessor(cache).getPropertyValue("map");
-			int n = 0;
-			while (n++ < 100 && map.size() != 0) {
-				Thread.sleep(100);
-			}
+			await().until(() -> map.size() == 0);
 			verify(cache, never()).put(any(), any(RetryContext.class));
 			verify(cache, never()).remove(any());
-			assertThat(map).as("Expected map.size() = 0, was: " + map.size()).hasSize(0);
 		}
 		finally {
 			container.stop();
@@ -167,10 +158,7 @@ public class MissingIdRetryTests {
 		try {
 			assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
 			Map map = (Map) new DirectFieldAccessor(cache).getPropertyValue("map");
-			int n = 0;
-			while (n++ < 100 && map.size() != 0) {
-				Thread.sleep(100);
-			}
+			await().until(() -> map.size() == 0);
 			ArgumentCaptor putCaptor = ArgumentCaptor.forClass(Object.class);
 			ArgumentCaptor getCaptor = ArgumentCaptor.forClass(Object.class);
 			ArgumentCaptor removeCaptor = ArgumentCaptor.forClass(Object.class);
@@ -181,7 +169,6 @@ public class MissingIdRetryTests {
 			logger.debug("puts:" + putCaptor.getAllValues());
 			logger.debug("gets:" + putCaptor.getAllValues());
 			logger.debug("removes:" + removeCaptor.getAllValues());
-			assertThat(map).as("Expected map.size() = 0, was: " + map.size()).hasSize(0);
 		}
 		finally {
 			container.stop();
@@ -232,10 +219,7 @@ public class MissingIdRetryTests {
 		try {
 			assertThat(cdl.await(30, TimeUnit.SECONDS)).isTrue();
 			Map map = (Map) new DirectFieldAccessor(cache).getPropertyValue("map");
-			int n = 0;
-			while (n++ < 100 && map.size() != 0) {
-				Thread.sleep(100);
-			}
+			await().until(() -> map.size() == 0);
 			ArgumentCaptor putCaptor = ArgumentCaptor.forClass(Object.class);
 			ArgumentCaptor getCaptor = ArgumentCaptor.forClass(Object.class);
 			ArgumentCaptor removeCaptor = ArgumentCaptor.forClass(Object.class);
@@ -246,7 +230,6 @@ public class MissingIdRetryTests {
 			logger.debug("puts:" + putCaptor.getAllValues());
 			logger.debug("gets:" + putCaptor.getAllValues());
 			logger.debug("removes:" + removeCaptor.getAllValues());
-			assertThat(map).as("Expected map.size() = 0, was: " + map.size()).hasSize(0);
 		}
 		finally {
 			container.stop();

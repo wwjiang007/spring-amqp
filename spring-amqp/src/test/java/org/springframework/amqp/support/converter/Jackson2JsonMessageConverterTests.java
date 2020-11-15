@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,25 +18,29 @@ package org.springframework.amqp.support.converter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.Hashtable;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.data.web.JsonPath;
-import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
+import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.BeanSerializerFactory;
 
 /**
@@ -47,8 +51,7 @@ import com.fasterxml.jackson.databind.ser.BeanSerializerFactory;
  * @author Andreas Asplund
  * @author Artem Bilan
  */
-@ContextConfiguration
-@RunWith(SpringJUnit4ClassRunner.class)
+@SpringJUnitConfig
 public class Jackson2JsonMessageConverterTests {
 
 	public static final String TRUSTED_PACKAGE = Jackson2JsonMessageConverterTests.class.getPackage().getName();
@@ -60,7 +63,7 @@ public class Jackson2JsonMessageConverterTests {
 	@Autowired
 	private Jackson2JsonMessageConverter jsonConverterWithDefaultType;
 
-	@Before
+	@BeforeEach
 	public void before() {
 		converter = new Jackson2JsonMessageConverter(TRUSTED_PACKAGE);
 		trade = new SimpleTrade();
@@ -189,8 +192,9 @@ public class Jackson2JsonMessageConverterTests {
 		byte[] bytes = "{\"name\" : \"foo\" }".getBytes();
 		MessageProperties messageProperties = new MessageProperties();
 		Message message = new Message(bytes, messageProperties);
-		Object foo = jsonConverterWithDefaultType.fromMessage(message);
-		assertThat(new String((byte[]) foo)).isEqualTo(new String(bytes));
+		this.jsonConverterWithDefaultType.setAssumeSupportedContentType(false);
+		Object foo = this.jsonConverterWithDefaultType.fromMessage(message);
+		assertThat(foo).isEqualTo(bytes);
 	}
 
 	@Test
@@ -278,6 +282,96 @@ public class Jackson2JsonMessageConverterTests {
 		assertThat(fromMessage).isInstanceOf(Sample.class);
 		assertThat(((Sample) fromMessage).getUsername()).isEqualTo("SomeUsername");
 		assertThat(((Sample) fromMessage).getName()).isEqualTo("SomeName");
+	}
+
+	@Test
+	public void testMissingContentType() {
+		byte[] bytes = "{\"name\" : \"foo\" }".getBytes();
+		MessageProperties messageProperties = new MessageProperties();
+		Message message = new Message(bytes, messageProperties);
+		Jackson2JsonMessageConverter j2Converter = new Jackson2JsonMessageConverter();
+		DefaultClassMapper classMapper = new DefaultClassMapper();
+		classMapper.setDefaultType(Foo.class);
+		j2Converter.setClassMapper(classMapper);
+		Object foo = j2Converter.fromMessage(message);
+		assertThat(foo).isInstanceOf(Foo.class);
+
+		messageProperties.setContentType(null);
+		foo = j2Converter.fromMessage(message);
+		assertThat(foo).isInstanceOf(Foo.class);
+
+		j2Converter.setAssumeSupportedContentType(false);
+		foo = j2Converter.fromMessage(message);
+		assertThat(foo).isSameAs(bytes);
+	}
+
+	@Test
+	void customAbstractClass() {
+		byte[] bytes = "{\"field\" : \"foo\" }".getBytes();
+		MessageProperties messageProperties = new MessageProperties();
+		messageProperties.setHeader("__TypeId__", String.class.getName());
+		messageProperties.setInferredArgumentType(Baz.class);
+		Message message = new Message(bytes, messageProperties);
+		ObjectMapper mapper = new ObjectMapper();
+		mapper.registerModule(new BazModule());
+		Jackson2JsonMessageConverter j2Converter = new Jackson2JsonMessageConverter(mapper);
+		j2Converter.setAlwaysConvertToInferredType(true);
+		Baz baz = (Baz) j2Converter.fromMessage(message);
+		assertThat(((Qux) baz).getField()).isEqualTo("foo");
+	}
+
+	@Test
+	void fallbackToHeaders() {
+		byte[] bytes = "{\"field\" : \"foo\" }".getBytes();
+		MessageProperties messageProperties = new MessageProperties();
+		messageProperties.setHeader("__TypeId__", Buz.class.getName());
+		messageProperties.setInferredArgumentType(Baz.class);
+		Message message = new Message(bytes, messageProperties);
+		Jackson2JsonMessageConverter j2Converter = new Jackson2JsonMessageConverter();
+		Fiz buz = (Fiz) j2Converter.fromMessage(message);
+		assertThat(((Buz) buz).getField()).isEqualTo("foo");
+	}
+
+	@Test
+	void customAbstractClassList() throws Exception {
+		byte[] bytes = "[{\"field\" : \"foo\" }]".getBytes();
+		MessageProperties messageProperties = new MessageProperties();
+		messageProperties.setHeader("__TypeId__", String.class.getName());
+		messageProperties.setInferredArgumentType(getClass().getDeclaredMethod("bazLister").getGenericReturnType());
+		Message message = new Message(bytes, messageProperties);
+		ObjectMapper mapper = new ObjectMapper();
+		mapper.registerModule(new BazModule());
+		Jackson2JsonMessageConverter j2Converter = new Jackson2JsonMessageConverter(mapper);
+		j2Converter.setAlwaysConvertToInferredType(true);
+		@SuppressWarnings("unchecked")
+		List<Baz> bazs = (List<Baz>) j2Converter.fromMessage(message);
+		assertThat(bazs).hasSize(1);
+		assertThat(((Qux) bazs.get(0)).getField()).isEqualTo("foo");
+	}
+
+	@Test
+	void cantDeserializeFizListUseHeaders() throws Exception {
+		byte[] bytes = "[{\"field\" : \"foo\" }]".getBytes();
+		MessageProperties messageProperties = new MessageProperties();
+		messageProperties.setInferredArgumentType(getClass().getDeclaredMethod("fizLister").getGenericReturnType());
+		messageProperties.setHeader("__TypeId__", List.class.getName());
+		messageProperties.setHeader("__ContentTypeId__", Buz.class.getName());
+		Message message = new Message(bytes, messageProperties);
+		ObjectMapper mapper = new ObjectMapper();
+		mapper.registerModule(new BazModule());
+		Jackson2JsonMessageConverter j2Converter = new Jackson2JsonMessageConverter(mapper);
+		@SuppressWarnings("unchecked")
+		List<Fiz> buzs = (List<Fiz>) j2Converter.fromMessage(message);
+		assertThat(buzs).hasSize(1);
+		assertThat(((Buz) buzs.get(0)).getField()).isEqualTo("foo");
+	}
+
+	public List<Baz> bazLister() {
+		return null;
+	}
+
+	public List<Fiz> fizLister() {
+		return null;
 	}
 
 	public static class Foo {
@@ -402,6 +496,75 @@ public class Jackson2JsonMessageConverterTests {
 
 		@JsonPath("$.user.name")
 		String getName();
+
+	}
+
+	public interface Baz {
+
+	}
+
+	public static class Qux implements Baz {
+
+		private String field;
+
+		public Qux(String field) {
+			this.field = field;
+		}
+
+		public String getField() {
+			return this.field;
+		}
+
+		public void setField(String field) {
+			this.field = field;
+		}
+
+	}
+
+	@SuppressWarnings("serial")
+	public static class BazDeserializer extends StdDeserializer<Baz> {
+
+		public BazDeserializer() {
+			super(Baz.class);
+		}
+
+		@Override
+		public Baz deserialize(JsonParser p, DeserializationContext ctxt)
+				throws IOException, JsonProcessingException {
+
+			p.nextFieldName();
+			String field = p.nextTextValue();
+			p.nextToken();
+			return new Qux(field);
+
+		}
+
+	}
+
+	public interface Fiz {
+
+	}
+
+	public static class Buz implements Fiz {
+
+		private String field;
+
+		public String getField() {
+			return this.field;
+		}
+
+		public void setField(String field) {
+			this.field = field;
+		}
+
+	}
+
+	@SuppressWarnings("serial")
+	public static class BazModule extends SimpleModule {
+
+		public BazModule() {
+			addDeserializer(Baz.class, new BazDeserializer());
+		}
 
 	}
 

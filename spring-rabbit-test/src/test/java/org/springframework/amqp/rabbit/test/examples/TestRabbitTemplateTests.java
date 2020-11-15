@@ -14,16 +14,19 @@
  * limitations under the License.
  */
 
-package org.springframework.amqp.rabbit.test;
+package org.springframework.amqp.rabbit.test.examples;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.Mockito.mock;
 
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import java.io.IOException;
+
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -32,11 +35,13 @@ import org.springframework.amqp.rabbit.connection.Connection;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
+import org.springframework.amqp.rabbit.test.TestRabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
+import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Channel;
 
 
@@ -47,7 +52,7 @@ import com.rabbitmq.client.Channel;
  * @since 2.0
  *
  */
-@RunWith(SpringRunner.class)
+@SpringJUnitConfig
 public class TestRabbitTemplateTests {
 
 	@Autowired
@@ -86,23 +91,26 @@ public class TestRabbitTemplateTests {
 		public String smlc1In = "smlc1:";
 
 		@Bean
-		public TestRabbitTemplate template() {
+		public TestRabbitTemplate template() throws IOException {
 			return new TestRabbitTemplate(connectionFactory());
 		}
 
 		@Bean
-		public ConnectionFactory connectionFactory() {
+		public ConnectionFactory connectionFactory() throws IOException {
 			ConnectionFactory factory = mock(ConnectionFactory.class);
 			Connection connection = mock(Connection.class);
 			Channel channel = mock(Channel.class);
+			AMQP.Queue.DeclareOk declareOk = mock(AMQP.Queue.DeclareOk.class);
 			willReturn(connection).given(factory).createConnection();
 			willReturn(channel).given(connection).createChannel(anyBoolean());
 			given(channel.isOpen()).willReturn(true);
+			given(channel.queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), anyMap()))
+					.willReturn(declareOk);
 			return factory;
 		}
 
 		@Bean
-		public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory() {
+		public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory() throws IOException {
 			SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
 			factory.setConnectionFactory(connectionFactory());
 			return factory;
@@ -124,7 +132,7 @@ public class TestRabbitTemplateTests {
 		}
 
 		@Bean
-		public SimpleMessageListenerContainer smlc1() {
+		public SimpleMessageListenerContainer smlc1() throws IOException {
 			SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory());
 			container.setQueueNames("foo", "bar");
 			container.setMessageListener(new MessageListenerAdapter(new Object() {

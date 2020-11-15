@@ -1,41 +1,54 @@
 [[whats-new]]
-=== What's New
+== What's New
 
-==== Changes in 2.2 Since 2.1
+=== Changes in 2.3 Since 2.2
 
-This section describes the changes between version 2.1 and version 2.2.
+This section describes the changes between version 2.2 and version 2.3.
+See <<change-history>> for changes in previous versions.
 
-===== Package Changes
+==== Connection Factory Changes
 
-The following classes/interfaces have been moved from `org.springframework.amqp.rabbit.core.support` to `org.springframework.amqp.rabbit.batch`:
+Two additional connection factories are now provided.
+See <<choosing-factory>> for more information.
 
-* `BatchingStrategy`
-* `MessageBatch`
-* `SimpleBatchingStrategy`
+==== `@RabbitListener` Changes
 
-In addition, `ListenerExecutionFailedException` has been moved from `org.springframework.amqp.rabbit.listener.exception` to `org.springframework.amqp.rabbit.support`.
+You can now specify a reply content type.
+See <<reply-content-type>> for more information.
 
-===== @RabbitListener Changes
+==== Message Converter Changes
 
-You can now configure an `executor` on each listener, overriding the factory configuration, to more easily identify threads associated with the listener.
-You can now override the container factory's `acknowledgeMode` property with the annotation's `ackMode` property.
-See <<listener-property-overrides,overriding container factory properties>> for more information.
+The `Jackson2JMessageConverter` s can now deserialize abstract classes (including interfaces) if the `ObjectMapper` is configured with a custom deserializer.
+See <<jackson-abstract>> for more information.
 
-When using <<receiving-batch,batching>>, `@RabbitListener` methods can now receive a complete batch of messages in one call instead of getting them one-at-a-time.
+==== Testing Changes
 
-When receiving batched messages one-at-a-time, the last message has the `isLastInBatch` message property set to true.
+A new annotation `@SpringRabbitTest` is provided to automatically configure some infrastructure beans for when you are not using `SpringBootTest`.
+See <<spring-rabbit-test>> for more information.
 
-In addition, received batched messages now contain the `amqp_batchSize` header.
+==== RabbitTemplate Changes
 
-Spring Data Projection interfaces are now supported by the `Jackson2JsonMessageConverter`.
-See <<data-projection>> for more information.
+The template's `ReturnCallback` has been refactored as `ReturnsCallback` for simpler use in lambda expressions.
+See <<template-confirms>> for more information.
 
-===== AMQP Logging Appenders Changes
+When using returns and correlated confirms, the `CorrelationData` now requires a unique `id` property.
+See <<template-confirms>> for more information.
 
-The Log4J and Logback `AmqpAppender` s now support a `verifyHostname` SSL option.
-See <<logging>> for more information.
+==== Listener Container Changes
 
-===== MessageListenerAdapter Changes
+A new listener container property `consumeDelay` is now available; it is helpful when using the https://github.com/rabbitmq/rabbitmq-sharding[RabbitMQ Sharding Plugin].
 
-The `MessageListenerAdapter` provides now a new `buildListenerArguments(Object, Channel, Message)` method  to build an array of arguments to be passed into target listener and an old one is deprecated.
-See <<message-listener-adapter>> for more information.
+The default `JavaLangErrorHandler` now calls `System.exit(99)`.
+To revert to the previous behavior (do nothing), add a no-op handler.
+
+See <<containerAttributes>> for more information.
+
+==== MessagePostProcessor Changes
+
+The compressing `MessagePostProcessor` s now use a comma to separate multiple content encodings instead of a colon.
+The decompressors can handle both formats but, if you produce messages with this version that are consumed by versions earlier than 2.2.12, you should configure the compressor to use the old delimiter.
+See the IMPORTANT note in <<post-processing>> for more information.
+
+==== Multiple Broker Support Improvements
+
+See <<multi-rabbit>> for more information.

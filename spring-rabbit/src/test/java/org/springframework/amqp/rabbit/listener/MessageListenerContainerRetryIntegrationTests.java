@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,30 +27,27 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.aopalliance.aop.Advice;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.logging.log4j.Level;
-import org.junit.After;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.AcknowledgeMode;
+import org.springframework.amqp.core.BatchMessageListener;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.config.AbstractRetryOperationsInterceptorFactoryBean;
 import org.springframework.amqp.rabbit.config.StatefulRetryOperationsInterceptorFactoryBean;
 import org.springframework.amqp.rabbit.config.StatelessRetryOperationsInterceptorFactoryBean;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.junit.BrokerRunning;
 import org.springframework.amqp.rabbit.junit.BrokerTestUtils;
+import org.springframework.amqp.rabbit.junit.LogLevels;
+import org.springframework.amqp.rabbit.junit.RabbitAvailable;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
-import org.springframework.amqp.rabbit.test.LogLevelAdjuster;
-import org.springframework.amqp.rabbit.test.RepeatProcessor;
+import org.springframework.amqp.rabbit.retry.MessageBatchRecoverer;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.amqp.support.converter.SimpleMessageConverter;
-import org.springframework.amqp.utils.SerializationUtils;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.retry.policy.MapRetryContextCache;
 import org.springframework.retry.support.RetryTemplate;
-import org.springframework.test.annotation.Repeat;
 
 /**
  * @author Dave Syer
@@ -61,25 +58,17 @@ import org.springframework.test.annotation.Repeat;
  * @since 1.0
  *
  */
+@RabbitAvailable(queues = MessageListenerContainerRetryIntegrationTests.TEST_QUEUE)
+@LogLevels(level = "ERROR", classes = {
+		RabbitTemplate.class, SimpleMessageListenerContainer.class, BlockingQueueConsumer.class,
+		StatefulRetryOperationsInterceptorFactoryBean.class, MessageListenerContainerRetryIntegrationTests.class })
 public class MessageListenerContainerRetryIntegrationTests {
+
+	public static final String TEST_QUEUE = "test.queue.MessageListenerContainerRetryIntegrationTests";
 
 	private static Log logger = LogFactory.getLog(MessageListenerContainerRetryIntegrationTests.class);
 
-	private static Queue queue = new Queue("test.queue");
-
-	@Rule
-	public BrokerRunning brokerIsRunning = BrokerRunning.isRunningWithEmptyQueues(queue.getName());
-
-	@Rule
-	public LogLevelAdjuster logLevels = new LogLevelAdjuster(Level.ERROR, RabbitTemplate.class,
-			SimpleMessageListenerContainer.class, BlockingQueueConsumer.class);
-
-	@Rule
-	public LogLevelAdjuster traceLevels = new LogLevelAdjuster(Level.ERROR,
-			StatefulRetryOperationsInterceptorFactoryBean.class, MessageListenerContainerRetryIntegrationTests.class);
-
-	@Rule
-	public RepeatProcessor repeats = new RepeatProcessor();
+	private static Queue queue = new Queue(TEST_QUEUE);
 
 	private RetryTemplate retryTemplate;
 
@@ -93,23 +82,53 @@ public class MessageListenerContainerRetryIntegrationTests {
 		connectionFactory.setPort(BrokerTestUtils.getPort());
 		template.setConnectionFactory(connectionFactory);
 		if (messageConverter == null) {
-			SimpleMessageConverter messageConverter = new SimpleMessageConverter();
-			messageConverter.setCreateMessageIds(true);
-			this.messageConverter = messageConverter;
+			SimpleMessageConverter converter = new SimpleMessageConverter();
+			converter.setCreateMessageIds(true);
+			this.messageConverter = converter;
 		}
 		template.setMessageConverter(messageConverter);
 		return template;
 	}
 
-	@After
-	public void tearDown() {
-		if (this.repeats.isFinalizing()) {
-			this.brokerIsRunning.removeTestQueues();
-		}
+	@Test
+	void testStatelessRetryWithBatchListener() throws Exception {
+		doTestRetryWithBatchListener(false);
 	}
 
 	@Test
-	public void testStatefulRetryWithAllMessagesFailing() throws Exception {
+	void testStatefulRetryWithBatchListener() throws Exception {
+		doTestRetryWithBatchListener(true);
+	}
+
+	private void doTestRetryWithBatchListener(boolean stateful) throws Exception {
+		RabbitTemplate template = createTemplate(1);
+		template.convertAndSend(queue.getName(), "foo");
+		template.convertAndSend(queue.getName(), "bar");
+
+		final SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(
+				template.getConnectionFactory());
+		container.setMessageListener((BatchMessageListener) messages -> {
+			throw new RuntimeException("intended");
+		});
+		container.setAcknowledgeMode(AcknowledgeMode.AUTO);
+		container.setConsumerBatchEnabled(true);
+		assertThat(container.isConsumerBatchEnabled()).isTrue();
+		container.setBatchSize(2);
+
+		final CountDownLatch latch = new CountDownLatch(1);
+		container.setAdviceChain(new Advice[] { createRetryInterceptor(latch, stateful, true) });
+
+		container.setQueueNames(queue.getName());
+		container.setReceiveTimeout(50);
+		container.afterPropertiesSet();
+		container.start();
+
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+		container.stop();
+	}
+
+	@Test
+	void testStatefulRetryWithAllMessagesFailing() throws Exception {
 
 		int messageCount = 10;
 		int txSize = 1;
@@ -120,7 +139,7 @@ public class MessageListenerContainerRetryIntegrationTests {
 	}
 
 	@Test
-	public void testStatelessRetryWithAllMessagesFailing() throws Exception {
+	void testStatelessRetryWithAllMessagesFailing() throws Exception {
 
 		int messageCount = 10;
 		int txSize = 1;
@@ -131,7 +150,7 @@ public class MessageListenerContainerRetryIntegrationTests {
 	}
 
 	@Test
-	public void testStatefulRetryWithNoMessageIds() {
+	void testStatefulRetryWithNoMessageIds() {
 
 		int messageCount = 2;
 		int txSize = 1;
@@ -153,9 +172,8 @@ public class MessageListenerContainerRetryIntegrationTests {
 			.hasMessageContaining("but was not.");
 	}
 
-	@Test
-	@Repeat(10)
-	public void testStatefulRetryWithTxSizeAndIntermittentFailure() throws Exception {
+	@RepeatedTest(10)
+	void testStatefulRetryWithTxSizeAndIntermittentFailure() throws Exception {
 
 		int messageCount = 10;
 		int txSize = 4;
@@ -166,7 +184,7 @@ public class MessageListenerContainerRetryIntegrationTests {
 	}
 
 	@Test
-	public void testStatefulRetryWithMoreMessages() throws Exception {
+	void testStatefulRetryWithMoreMessages() throws Exception {
 
 		int messageCount = 200;
 		int txSize = 10;
@@ -177,6 +195,12 @@ public class MessageListenerContainerRetryIntegrationTests {
 	}
 
 	private Advice createRetryInterceptor(final CountDownLatch latch, boolean stateful) throws Exception {
+		return createRetryInterceptor(latch, stateful, false);
+	}
+
+	private Advice createRetryInterceptor(final CountDownLatch latch, boolean stateful, boolean listRecoverer)
+			throws Exception {
+
 		AbstractRetryOperationsInterceptorFactoryBean factory;
 		if (stateful) {
 			factory = new StatefulRetryOperationsInterceptorFactoryBean();
@@ -184,11 +208,16 @@ public class MessageListenerContainerRetryIntegrationTests {
 		else {
 			factory = new StatelessRetryOperationsInterceptorFactoryBean();
 		}
-		factory.setMessageRecoverer((message, cause) -> {
-			logger.warn("Recovered: [" + SerializationUtils.deserialize(message.getBody()).toString() +
-					"], message: " + message);
-			latch.countDown();
-		});
+		if (listRecoverer) {
+			factory.setMessageRecoverer((MessageBatchRecoverer) (messages, cause) -> {
+				latch.countDown();
+			});
+		}
+		else {
+			factory.setMessageRecoverer((message, cause) -> {
+				latch.countDown();
+			});
+		}
 		if (retryTemplate == null) {
 			retryTemplate = new RetryTemplate();
 		}
@@ -222,7 +251,7 @@ public class MessageListenerContainerRetryIntegrationTests {
 		container.setMessageListener(new MessageListenerAdapter(listener));
 		container.setAcknowledgeMode(AcknowledgeMode.AUTO);
 		container.setChannelTransacted(true);
-		container.setTxSize(txSize);
+		container.setBatchSize(txSize);
 		container.setConcurrentConsumers(concurrentConsumers);
 
 		final CountDownLatch latch = new CountDownLatch(failedMessageCount);

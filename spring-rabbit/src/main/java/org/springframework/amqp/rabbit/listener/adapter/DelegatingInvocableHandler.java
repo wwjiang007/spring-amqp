@@ -131,10 +131,12 @@ public class DelegatingInvocableHandler {
 		if (message.getHeaders().get(AmqpHeaders.REPLY_TO) == null) {
 			Expression replyTo = this.handlerSendTo.get(handler);
 			if (replyTo != null) {
-				return new InvocationResult(result, replyTo, handler.getMethod().getGenericReturnType());
+				return new InvocationResult(result, replyTo, handler.getMethod().getGenericReturnType(),
+						handler.getBean(), handler.getMethod());
 			}
 		}
-		return new InvocationResult(result, null, handler.getMethod().getGenericReturnType());
+		return new InvocationResult(result, null, handler.getMethod().getGenericReturnType(), handler.getBean(),
+				handler.getMethod());
 	}
 
 	/**
@@ -270,6 +272,16 @@ public class DelegatingInvocableHandler {
 
 	public boolean hasDefaultHandler() {
 		return this.defaultHandler != null;
+	}
+
+	@Nullable
+	public InvocationResult getInvocationResultFor(Object result, Object inboundPayload) {
+		InvocableHandlerMethod handler = findHandlerForPayload(inboundPayload.getClass());
+		if (handler != null) {
+			return new InvocationResult(result, this.handlerSendTo.get(handler),
+					handler.getMethod().getGenericReturnType(), handler.getBean(), handler.getMethod());
+		}
+		return null;
 	}
 
 }

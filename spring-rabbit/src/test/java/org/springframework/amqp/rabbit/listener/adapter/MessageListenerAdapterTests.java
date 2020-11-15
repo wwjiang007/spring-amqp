@@ -18,9 +18,11 @@ package org.springframework.amqp.rabbit.listener.adapter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -28,8 +30,8 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Address;
@@ -41,14 +43,18 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.retry.RetryPolicy;
 import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.retry.support.RetryTemplate;
+import org.springframework.util.concurrent.ListenableFuture;
+import org.springframework.util.concurrent.SettableListenableFuture;
 
 import com.rabbitmq.client.Channel;
+import reactor.core.publisher.Mono;
 
 /**
  * @author Dave Syer
  * @author Greg Turnquist
  * @author Gary Russell
  * @author Cai Kun
+ * @author Artem Bilan
  *
  */
 public class MessageListenerAdapterTests {
@@ -59,7 +65,7 @@ public class MessageListenerAdapterTests {
 
 	private final SimpleService simpleService = new SimpleService();
 
-	@Before
+	@BeforeEach
 	public void init() {
 		this.messageProperties = new MessageProperties();
 		this.messageProperties.setContentType(MessageProperties.CONTENT_TYPE_TEXT_PLAIN);
@@ -211,6 +217,44 @@ public class MessageListenerAdapterTests {
 		assertThat(replyAddress.get().getExchangeName()).isEqualTo("foo");
 		assertThat(replyAddress.get().getRoutingKey()).isEqualTo("bar");
 		assertThat(throwable.get()).isSameAs(ex);
+	}
+
+	@Test
+	public void testListenableFutureReturn() throws Exception {
+		class Delegate {
+
+			@SuppressWarnings("unused")
+			public ListenableFuture<String> myPojoMessageMethod(String input) {
+				SettableListenableFuture<String> future = new SettableListenableFuture<>();
+				future.set("processed" + input);
+				return future;
+			}
+
+		}
+		this.adapter = new MessageListenerAdapter(new Delegate(), "myPojoMessageMethod");
+		this.adapter.containerAckMode(AcknowledgeMode.MANUAL);
+		this.adapter.setResponseExchange("default");
+		Channel mockChannel = mock(Channel.class);
+		this.adapter.onMessage(new Message("foo".getBytes(), this.messageProperties), mockChannel);
+		verify(mockChannel).basicAck(anyLong(), eq(false));
+	}
+
+	@Test
+	public void testMonoVoidReturnAck() throws Exception {
+		class Delegate {
+
+			@SuppressWarnings("unused")
+			public Mono<Void> myPojoMessageMethod(String input) {
+				return Mono.empty();
+			}
+
+		}
+		this.adapter = new MessageListenerAdapter(new Delegate(), "myPojoMessageMethod");
+		this.adapter.containerAckMode(AcknowledgeMode.MANUAL);
+		this.adapter.setResponseExchange("default");
+		Channel mockChannel = mock(Channel.class);
+		this.adapter.onMessage(new Message("foo".getBytes(), this.messageProperties), mockChannel);
+		verify(mockChannel).basicAck(anyLong(), eq(false));
 	}
 
 	public interface Service {

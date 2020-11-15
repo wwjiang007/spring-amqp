@@ -57,7 +57,7 @@ You can also extend those properties with user-defined 'headers' by calling the 
 IMPORTANT: Starting with versions `1.5.7`, `1.6.11`, `1.7.4`, and `2.0.0`, if a message body is a serialized `Serializable` java object, it is no longer deserialized (by default) when performing `toString()` operations (such as in log messages).
 This is to prevent unsafe deserialization.
 By default, only `java.util` and `java.lang` classes are deserialized.
-To revert to the previous behavior, you can add allowable class/package patterns by invoking `Message.addWhiteListPatterns(...)`.
+To revert to the previous behavior, you can add allowable class/package patterns by invoking `Message.addAllowedListPatterns(...)`.
 A simple `*` wildcard is supported, for example `com.something.*, *.MyClass`.
 Bodies that cannot be deserialized are represented by `byte[<size>]` in log messages.
 
@@ -85,7 +85,7 @@ public interface Exchange {
 ----
 
 As you can see, an `Exchange` also has a 'type' represented by constants defined in `ExchangeTypes`.
-The basic types are: `direct`, `topic`, fanout`, and `headers`.
+The basic types are: `direct`, `topic`, `fanout`, and `headers`.
 In the core package, you can find implementations of the `Exchange` interface for each of those types.
 The behavior varies across these `Exchange` types in terms of how they handle bindings to queues.
 For example, a `Direct` exchange lets a queue be bound by a fixed routing key (often the queue's name).
@@ -201,7 +201,63 @@ Therefore, in this section, we focus on code that exists only within our "`sprin
 
 The central component for managing a connection to the RabbitMQ broker is the `ConnectionFactory` interface.
 The responsibility of a `ConnectionFactory` implementation is to provide an instance of `org.springframework.amqp.rabbit.connection.Connection`, which is a wrapper for `com.rabbitmq.client.Connection`.
-The only concrete implementation we provide is `CachingConnectionFactory`, which, by default, establishes a single connection proxy that can be shared by the application.
+
+[[choosing-factory]]
+===== Choosing a Connection Factory
+
+There are three connection factories to chose from
+
+* `PooledChannelConnectionFactory`
+* `ThreadChannelConnectionFactory`
+* `CachingConnectionFactory`
+
+The first two were added in version 2.3.
+
+For most use cases, the `PooledChannelConnectionFactory` should be used.
+The `ThreadChannelConnectionFactory` can be used if you want to ensure strict message ordering without the need to use <<scoped-operations>>.
+The `CachingConnectionFactory` should be used if you want to use correlated publisher confirmations or if you wish to open multiple connections, via its `CacheMode`.
+
+Simple publisher confirmations are supported by all three factories.
+
+====== `PooledChannelConnectionFactory`
+
+This factory manages a single connection and two pools of channels, based on the Apache Pool2.
+One pool is for transactional channels, the other is for non-transactional channels.
+The pools are `GenericObjectPool` s with default configuration; a callback is provided to configure the pools; refer to the Apache documentation for more information.
+
+The Apache `commons-pool2` jar must be on the class path to use this factory.
+
+====
+[source, java]
+----
+@Bean
+PooledChannelConnectionFactory pcf() throws Exception {
+    ConnectionFactory rabbitConnectionFactory = new ConnectionFactory();
+    rabbitConnectionFactory.setHost("localhost");
+    PooledChannelConnectionFactory pcf = new PooledChannelConnectionFactory(rabbitConnectionFactory);
+    pcf.setPoolConfigurer((pool, tx) -> {
+        if (tx) {
+            // configure the transactional pool
+        }
+        else {
+            // configure the non-transactional pool
+        }
+    });
+    return pcf;
+}
+----
+====
+
+====== `ThreadChannelConnectionFactory`
+
+This factory manages a single connection and two `ThreadLocal` s, one for transactional channels, the other for non-transactional channels.
+This factory ensures that all operations on the same thread use the same channel (as long as it remains open).
+This facilitates strict message ordering without the need for <<scoped-operations>>.
+To avoid memory leaks, if your application uses many short-lived threads, you must call the factory's `closeThreadChannel()` to release the channel resource.
+
+====== `CachingConnectionFactory`
+
+The third implementation provided is the `CachingConnectionFactory`, which, by default, establishes a single connection proxy that can be shared by the application.
 Sharing of the connection is possible since the "`unit of work`" for messaging with AMQP is actually a "`channel`" (in some ways, this is similar to the relationship between a connection and a session in JMS).
 The connection instance provides a `createChannel` method.
 The `CachingConnectionFactory` implementation supports caching of those channels, and it maintains separate caches for channels based on whether they are transactional.
@@ -356,9 +412,11 @@ Alternatively, if running in a clustered environment, you can use the addresses 
 [source,xml]
 ----
 <rabbit:connection-factory
-    id="connectionFactory" addresses="host1:5672,host2:5672"/>
+    id="connectionFactory" addresses="host1:5672,host2:5672" address-shuffle-mode="RANDOM"/>
 ----
 ====
+
+See <<cluster>> for information about `address-shuffle-mode`.
 
 The following example with a custom thread factory that prefixes thread names with `rabbitmq-`:
 
@@ -375,6 +433,11 @@ The following example with a custom thread factory that prefixes thread names wi
 
 ----
 ====
+
+===== AddressResolver
+
+Starting with version 2.1.15, you can now use an `AddressResover` to resolve the connection address(es).
+This will override any settings of the `addresses` and `host/port` properties.
 
 ===== Naming Connections
 
@@ -521,6 +584,44 @@ If you wish to skip this validation for some reason, set the factory bean's `ski
 Starting with version 2.1, the `RabbitConnectionFactoryBean` now calls `enableHostnameVerification()` by default.
 To revert to the previous behavior, set the `enableHostnameVerification` property to `false`.
 
+IMPORTANT: Starting with version 2.2.5, the factory bean will always use TLS v1.2 by default; previously, it used v1.1 in some cases and v1.2 in others (depending on other properties).
+If you need to use v1.1 for some reason, set the `sslAlgorithm` property: `setSslAlgorithm("TLSv1.1")`.
+
+[[cluster]]
+===== Connecting to a Cluster
+
+To connect to a cluster, configure the `addresses` property on the `CachingConnectionFactory`:
+
+====
+[source, java]
+----
+@Bean
+public CachingConnectionFactory ccf() {
+    CachingConnectionFactory ccf = new CachingConnectionFactory();
+    ccf.setAddresses("host1:5672,host2:5672,host3:5672");
+    return ccf;
+}
+----
+====
+
+The underlying connection factory will attempt to connect to each host, in order, whenever a new connection is established.
+Starting with version 2.1.8, the connection order can be made random by setting the `addressShuffleMode` property to `RANDOM`; the shuffle will be applied before creating any new connection.
+Starting with version 2.6, the `INORDER` shuffle mode was added, which means the first address is moved to the end after a connection is created.
+You may wish to use this mode with the https://github.com/rabbitmq/rabbitmq-sharding[RabbitMQ Sharding Plugin] with `CacheMode.CONNECTION` and suitable concurrency if you wish to consume from all shards on all nodes.
+
+====
+[source, java]
+----
+@Bean
+public CachingConnectionFactory ccf() {
+    CachingConnectionFactory ccf = new CachingConnectionFactory();
+    ccf.setAddresses("host1:5672,host2:5672,host3:5672");
+    ccf.setAddressShuffleMode(AddressShuffleMode.RANDOM);
+    return ccf;
+}
+----
+====
+
 [[routing-connection-factory]]
 ===== Routing Connection Factory
 
@@ -535,12 +636,12 @@ The following examples shows how to configure a `SimpleRoutingConnectionFactory`
 ----
 <bean id="connectionFactory"
       class="org.springframework.amqp.rabbit.connection.SimpleRoutingConnectionFactory">
-	<property name="targetConnectionFactories">
-		<map>
-			<entry key="#{connectionFactory1.virtualHost}" ref="connectionFactory1"/>
-			<entry key="#{connectionFactory2.virtualHost}" ref="connectionFactory2"/>
-		</map>
-	</property>
+    <property name="targetConnectionFactories">
+        <map>
+            <entry key="#{connectionFactory1.virtualHost}" ref="connectionFactory1"/>
+            <entry key="#{connectionFactory2.virtualHost}" ref="connectionFactory2"/>
+        </map>
+    </property>
 </bean>
 
 <rabbit:template id="template" connection-factory="connectionFactory" />
@@ -592,7 +693,7 @@ For example, with lookup key qualifier `thing1` and a container listening to que
 
 When using HA queues in a cluster, for the best performance, you may want to connect to the physical broker
 where the master queue resides.
-While the `CachingConnectionFactory` can be configured with multiple broker addresses.
+The `CachingConnectionFactory` can be configured with multiple broker addresses.
 This is to fail over and the client attempts to connect in order.
 The `LocalizedQueueConnectionFactory` uses the REST API provided by the admin plugin to determine on which node the queue is mastered.
 It then creates (or retrieves from a cache) a `CachingConnectionFactory` that connects to just that node.
@@ -609,17 +710,13 @@ CAUTION: This connection factory is intended for long-lived connections, such as
 It is not intended for short connection use, such as with a `RabbitTemplate` because of the overhead of invoking the REST API before making the connection.
 Also, for publish operations, the queue is unknown, and the message is published to all cluster members anyway, so the logic of looking up the node has little value.
 
-The following example configuration shows how to use Spring Boot's RabbitProperties to configure the factories:
+The following example configuration shows how to configure the factories:
 
 ====
 [source, java]
 ----
 @Autowired
-private RabbitProperties props;
-
-private final String[] adminUris = { "https://host1:15672", "https://host2:15672" };
-
-private final String[] nodes = { "rabbit@host1", "rabbit@host2" };
+private ConfigurationProperties props;
 
 @Bean
 public ConnectionFactory defaultConnectionFactory() {
@@ -636,7 +733,8 @@ public ConnectionFactory queueAffinityCF(
         @Qualifier("defaultConnectionFactory") ConnectionFactory defaultCF) {
     return new LocalizedQueueConnectionFactory(defaultCF,
             StringUtils.commaDelimitedListToStringArray(this.props.getAddresses()),
-            this.adminUris, this.nodes,
+            StringUtils.commaDelimitedListToStringArray(this.props.getAdminUris()),
+            StringUtils.commaDelimitedListToStringArray(this.props.getNodes()),
             this.props.getVirtualHost(), this.props.getUsername(), this.props.getPassword(),
             false, null);
 }
@@ -644,13 +742,13 @@ public ConnectionFactory queueAffinityCF(
 ====
 
 Notice that the first three parameters are arrays of `addresses`, `adminUris`, and `nodes`.
-These are positional in that, when a container attempts to connect to a queue, it determines on which node the queue is
-mastered and connects to the address in the same array position.
+These are positional in that, when a container attempts to connect to a queue, it uses the admin API to determine on which node the queue is
+mastered and connects to the address in the same array position as that node.
 
 [[cf-pub-conf-ret]]
 ===== Publisher Confirms and Returns
 
-Confirmed and returned messages are supported by setting the `publisherConfirms` and `publisherReturns` properties of the `CachingConnectionFactory` to 'true'.
+Confirmed (with correlation) and returned messages are supported by setting the `CachingConnectionFactory` property `publisherConfirmType` to `ConfirmType.CORRELATED` and the `publisherReturns` property to 'true'.
 
 When these options are set, `Channel` instances created by the factory are wrapped in an `PublisherCallbackChannel`, which is used to facilitate the callbacks.
 When such a channel is obtained, the client can register a `PublisherCallbackChannel.Listener` with the `Channel`.
@@ -738,38 +836,38 @@ The following table describes the `CacheMode.CHANNEL` properties:
 .Cache properties for CacheMode.CHANNEL
 [cols="2l,4", options="header"]
 |===
-| Property
+|Property
 
-| Meaning
+|Meaning
 
-| connectionName
+|connectionName
 
-| The name of the connection generated by the `ConnectionNameStrategy`.
+|The name of the connection generated by the `ConnectionNameStrategy`.
 
-| channelCacheSize
+|channelCacheSize
 
-| The currently configured maximum channels that are allowed to be idle.
+|The currently configured maximum channels that are allowed to be idle.
 
-| localPort
+|localPort
 
-| The local port for the connection (if available).
+|The local port for the connection (if available).
 This can be used to correlate with connections and channels on the RabbitMQ Admin UI.
 
-| idleChannelsTx
+|idleChannelsTx
 
-| The number of transactional channels that are currently idle (cached).
+|The number of transactional channels that are currently idle (cached).
 
-| idleChannelsNotTx
+|idleChannelsNotTx
 
-| The number of non-transactional channels that are currently idle (cached).
+|The number of non-transactional channels that are currently idle (cached).
 
-| idleChannelsTxHighWater
+|idleChannelsTxHighWater
 
-| The maximum number of transactional channels that have been concurrently idle (cached).
+|The maximum number of transactional channels that have been concurrently idle (cached).
 
-| idleChannelsNotTxHighWater
+|idleChannelsNotTxHighWater
 
-| The maximum number of non-transactional channels have been concurrently idle (cached).
+|The maximum number of non-transactional channels have been concurrently idle (cached).
 
 |===
 
@@ -778,52 +876,52 @@ The following table describes the `CacheMode.CONNECTION` properties:
 .Cache properties for CacheMode.CONNECTION
 [cols="2l,4", options="header"]
 |===
-| Property
+|Property
 
-| Meaning
+|Meaning
 
-| connectionName:<localPort>
+|connectionName:<localPort>
 
-| The name of the connection generated by the `ConnectionNameStrategy`.
+|The name of the connection generated by the `ConnectionNameStrategy`.
 
-| openConnections
+|openConnections
 
-| The number of connection objects representing connections to brokers.
+|The number of connection objects representing connections to brokers.
 
-| channelCacheSize
+|channelCacheSize
 
-| The currently configured maximum channels that are allowed to be idle.
+|The currently configured maximum channels that are allowed to be idle.
 
-| connectionCacheSize
+|connectionCacheSize
 
-| The currently configured maximum connections that are allowed to be idle.
+|The currently configured maximum connections that are allowed to be idle.
 
-| idleConnections
+|idleConnections
 
-| The number of connections that are currently idle.
+|The number of connections that are currently idle.
 
-| idleConnectionsHighWater
+|idleConnectionsHighWater
 
-| The maximum number of connections that have been concurrently idle.
+|The maximum number of connections that have been concurrently idle.
 
-| idleChannelsTx:<localPort>
+|idleChannelsTx:<localPort>
 
-| The number of transactional channels that are currently idle (cached) for this connection.
+|The number of transactional channels that are currently idle (cached) for this connection.
 You can use the `localPort` part of the property name to correlate with connections and channels on the RabbitMQ Admin UI.
 
-| idleChannelsNotTx:<localPort>
+|idleChannelsNotTx:<localPort>
 
-| The number of non-transactional channels that are currently idle (cached) for this connection.
+|The number of non-transactional channels that are currently idle (cached) for this connection.
 The `localPort` part of the property name can be used to correlate with connections and channels on the RabbitMQ Admin UI.
 
-| idleChannelsTxHighWater:<localPort>
+|idleChannelsTxHighWater:<localPort>
 
-| The maximum number of transactional channels that have been concurrently idle (cached).
+|The maximum number of transactional channels that have been concurrently idle (cached).
 The localPort part of the property name can be used to correlate with connections and channels on the RabbitMQ Admin UI.
 
-| idleChannelsNotTxHighWater:<localPort>
+|idleChannelsNotTxHighWater:<localPort>
 
-| The maximum number of non-transactional channels have been concurrently idle (cached).
+|The maximum number of non-transactional channels have been concurrently idle (cached).
 You can use the `localPort` part of the property name to correlate with connections and channels on the RabbitMQ Admin UI.
 
 |===
@@ -1003,28 +1101,35 @@ To detect the exception on the sending thread, you can `setChannelTransacted(tru
 However, *transactions significantly impede performance*, so consider this carefully before enabling transactions for just this one use case.
 
 [[template-confirms]]
-===== Publisher Confirms and Returns
+===== Correlated Publisher Confirms and Returns
 
 The `RabbitTemplate` implementation of `AmqpTemplate` supports publisher confirms and returns.
 
 For returned messages, the template's `mandatory` property must be set to `true` or the `mandatory-expression`
 must evaluate to `true` for a particular message.
 This feature requires a `CachingConnectionFactory` that has its `publisherReturns` property set to `true` (see <<cf-pub-conf-ret>>).
-Returns are sent to the client by it registering a `RabbitTemplate.ReturnCallback` by calling `setReturnCallback(ReturnCallback callback)`.
+Returns are sent to the client by it registering a `RabbitTemplate.ReturnsCallback` by calling `setReturnsCallback(ReturnsCallback callback)`.
 The callback must implement the following method:
 
 ====
 [source,java]
 ----
-void returnedMessage(Message message, int replyCode, String replyText,
-          String exchange, String routingKey);
+void returnedMessage(ReturnedMessage returned);
 ----
 ====
 
-Only one `ReturnCallback` is supported by each `RabbitTemplate`.
+The `ReturnedMessage` has the following properties:
+
+- `message` - the returned message itself
+- `replyCode` - a code indicating the reason for the return
+- `replyText` - a textual reason for the return - e.g. `NO_ROUTE`
+- `exchange` - the exchange to which the message was sent
+- `routingKey` - the routing key that was used
+
+Only one `ReturnsCallback` is supported by each `RabbitTemplate`.
 See also <<reply-timeout>>.
 
-For publisher confirms (also known as publisher acknowledgements), the template requires a `CachingConnectionFactory` that has its `publisherConfirms` property set to `true`.
+For publisher confirms (also known as publisher acknowledgements), the template requires a `CachingConnectionFactory` that has its `publisherConfirm` property set to `ConfirmType.CORRELATED`.
 Confirms are sent to the client by it registering a `RabbitTemplate.ConfirmCallback` by calling `setConfirmCallback(ConfirmCallback callback)`.
 The callback must implement this method:
 
@@ -1061,7 +1166,16 @@ Version 2.1 and later no longer return the channel to the cache while confirms a
 The `RabbitTemplate` performs a logical `close()` on the channel after each operation.
 In general, this means that only one confirm is outstanding on a channel at a time.
 
-Starting with version 2.1, the `CorrelationData` object has a `ListenableFuture` that you can \used to get the result, instead of using a `ConfirmCallback` on the template.
+NOTE: Starting with version 2.2, the callbacks are invoked on one of the connection factory's `executor` threads.
+This is to avoid a potential deadlock if you perform Rabbit operations from within the callback.
+With previous versions, the callbacks were invoked directly on the `amqp-client` connection I/O thread; this would deadlock if you perform some RPC operation (such as opening a new channel) since the I/O thread blocks waiting for the result, but the result needs to be processed by the I/O thread itself.
+With those versions, it was necessary to hand off work (such as sending a messasge) to another thread within the callback.
+This is no longer necessary since the framework now hands off the callback invocation to the executor.
+
+IMPORTANT: The guarantee of receiving a returned message before the ack is still maintained as long as the return callback executes in 60 seconds or less.
+The confirm is scheduled to be delivered after the return callback exits or after 60 seconds, whichever comes first.
+
+Starting with version 2.1, the `CorrelationData` object has a `ListenableFuture` that you can use to get the result, instead of using a `ConfirmCallback` on the template.
 The following example shows how to configure a `CorrelationData` instance:
 
 ====
@@ -1078,8 +1192,8 @@ The `Confirm` object is a simple bean with 2 properties: `ack` and `reason` (for
 The reason is not populated for broker-generated `nack` instances.
 It is populated for `nack` instances generated by the framework (for example, closing the connection while `ack` instances are outstanding).
 
-In addition, when both confirms and returns are enabled, the `CorrelationData` is populated with the returned message.
-It is guaranteed that this occurs before the future is set with the `ack`.
+In addition, when both confirms and returns are enabled, the `CorrelationData` is populated with the returned message, as long as the `CorrelationData` has a unique `id`; this is always the case, by default, starting with version 2.3.
+It is guaranteed that the return message is set before the future is set with the `ack`.
 
 See also <<scoped-operations>> for a simpler mechanism for waiting for publisher confirms.
 
@@ -1132,9 +1246,9 @@ NOTE: The preceding discussion is moot if the template operations are already pe
 In that case, the operations are performed on that channel and committed when the thread returns to the container.
 It is not necessary to use `invoke` in that scenario.
 
-When using confirms in this way, much of the infrastructure set up for correlating confirms to requests is not really needed.
-Starting with version 2.1, the connection factory supports a new property called `simplePublisherConfirms`.
-When this is `true`, the infrastructure is avoided and the confirm processing can be more efficient.
+When using confirms in this way, much of the infrastructure set up for correlating confirms to requests is not really needed (unless returns are also enabled).
+Starting with version 2.2, the connection factory supports a new property called `publisherConfirmType`.
+When this is set to `ConfirmType.SIMPLE`, the infrastructure is avoided and the confirm processing can be more efficient.
 
 Furthermore, the `RabbitTemplate` sets the `publisherSequenceNumber` property in the sent message `MessageProperties`.
 If you wish to check (or log or otherwise use) specific confirms, you can do so with an overloaded `invoke` method, as the following example shows:
@@ -1362,7 +1476,7 @@ public static MessageBuilder fromClonedMessage(Message message) <5>
 
 <1> The message created by the builder has a body that is a direct reference to the argument.
 <2> The message created by the builder has a body that is a new array containing a copy of bytes in the argument.
-<3>	The message created by the builder has a body that is a new array containing the range of bytes from the argument.
+<3>    The message created by the builder has a body that is a new array containing the range of bytes from the argument.
 See https://docs.oracle.com/javase/7/docs/api/java/util/Arrays.html[`Arrays.copyOfRange()`] for more details.
 <4> The message created by the builder has a body that is a direct reference to the body of the argument.
 The argument's properties are copied to a new `MessageProperties`  object.
@@ -1440,11 +1554,11 @@ The following listing shows the `BatchingStrategy` interface definition:
 ----
 public interface BatchingStrategy {
 
-	MessageBatch addToBatch(String exchange, String routingKey, Message message);
+    MessageBatch addToBatch(String exchange, String routingKey, Message message);
 
-	Date nextRelease();
+    Date nextRelease();
 
-	Collection<MessageBatch> releaseBatches();
+    Collection<MessageBatch> releaseBatches();
 
 }
 ----
@@ -1521,9 +1635,9 @@ Object receiveAndConvert() throws AmqpException;
 
 Object receiveAndConvert(String queueName) throws AmqpException;
 
-Message receiveAndConvert(long timeoutMillis) throws AmqpException;
+Object receiveAndConvert(long timeoutMillis) throws AmqpException;
 
-Message receiveAndConvert(String queueName, long timeoutMillis) throws AmqpException;
+Object receiveAndConvert(String queueName, long timeoutMillis) throws AmqpException;
 ----
 ====
 
@@ -1538,22 +1652,22 @@ The following listing shows those method definitions:
 [source,java]
 ----
 <R, S> boolean receiveAndReply(ReceiveAndReplyCallback<R, S> callback)
-	   throws AmqpException;
+       throws AmqpException;
 
 <R, S> boolean receiveAndReply(String queueName, ReceiveAndReplyCallback<R, S> callback)
- 	throws AmqpException;
+     throws AmqpException;
 
 <R, S> boolean receiveAndReply(ReceiveAndReplyCallback<R, S> callback,
-	String replyExchange, String replyRoutingKey) throws AmqpException;
+    String replyExchange, String replyRoutingKey) throws AmqpException;
 
 <R, S> boolean receiveAndReply(String queueName, ReceiveAndReplyCallback<R, S> callback,
-	String replyExchange, String replyRoutingKey) throws AmqpException;
+    String replyExchange, String replyRoutingKey) throws AmqpException;
 
 <R, S> boolean receiveAndReply(ReceiveAndReplyCallback<R, S> callback,
- 	ReplyToAddressCallback<S> replyToAddressCallback) throws AmqpException;
+     ReplyToAddressCallback<S> replyToAddressCallback) throws AmqpException;
 
 <R, S> boolean receiveAndReply(String queueName, ReceiveAndReplyCallback<R, S> callback,
-			ReplyToAddressCallback<S> replyToAddressCallback) throws AmqpException;
+            ReplyToAddressCallback<S> replyToAddressCallback) throws AmqpException;
 ----
 ====
 
@@ -1687,7 +1801,7 @@ The following listing shows the definition of `FunctionalInterface`:
 @FunctionalInterface
 public interface ReplyingMessageListener<T, R> {
 
-	R handleMessage(T t);
+    R handleMessage(T t);
 
 }
 ----
@@ -1892,9 +2006,17 @@ When the container is later started, it uses its reference to `containerAdmin` t
 [[de-batching]]
 ===== Batched Messages
 
-Batched messages are automatically de-batched by listener containers (using the `springBatchFormat` message header).
+Batched messages (created by a producer) are automatically de-batched by listener containers (using the `springBatchFormat` message header).
 Rejecting any message from a batch causes the entire batch to be rejected.
 See <<template-batching>> for more information about batching.
+
+Starting with version 2.2, the `SimpleMessageListenerContainer` can be use to create batches on the consumer side (where the producer sent discrete messages).
+
+Set the container property `consumerBatchEnabled` to enable this feature.
+`deBatchingEnabled` must also be true so that the container is responsible for processing batches of both types.
+Implement `BatchMessageListener` or `ChannelAwareBatchMessageListener` when `consumerBatchEnabled` is true.
+Starting with version 2.2.7 both the `SimpleMessageListenerContainer` and `DirectMessageListenerContainer` can debatch <<template-batching,producer created batches>> as `List<Message>`.
+See <<receiving-batch>> for information about using this feature with `@RabbitListener`.
 
 [[consumer-events]]
 ===== Consumer Events
@@ -2118,9 +2240,44 @@ public class MetaListener {
 
 In the preceding example, each listener created by the `@MyAnonFanoutListener` annotation binds an anonymous, auto-delete
 queue to the fanout exchange, `metaFanout`.
-The meta-annotation mechanism is simple because attributes on the user-defined annotation are *not* examined - so
-you cannot override settings from the meta-annotation.
-You can use normal `@Bean` definitions when you need more advanced configuration.
+Starting with version 2.2.3, `@AliasFor` is supported to allow overriding properties on the meta-annotated annotation.
+Also, user annotations can now be `@Repeatable`, allowing multiple containers to be created for a method.
+
+====
+[source, java]
+----
+@Component
+static class MetaAnnotationTestBean {
+
+    @MyListener("queue1")
+    @MyListener("queue2")
+    public void handleIt(String body) {
+    }
+
+}
+
+
+@RabbitListener
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+@Repeatable(MyListeners.class)
+static @interface MyListener {
+
+    @AliasFor(annotation = RabbitListener.class, attribute = "queues")
+    String[] value() default {};
+
+}
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+static @interface MyListeners {
+
+    MyListener[] value();
+
+}
+----
+====
+
 
 [[async-annotation-driven-enable]]
 ====== Enable Listener Endpoint Annotations
@@ -2141,6 +2298,7 @@ public class AppConfig {
         factory.setConnectionFactory(connectionFactory());
         factory.setConcurrentConsumers(3);
         factory.setMaxConcurrentConsumers(10);
+        factory.setContainerCustomizer(container -> /* customize the container */);
         return factory;
     }
 }
@@ -2152,6 +2310,9 @@ It creates `DirectMessageListenerContainer` instances.
 
 NOTE: For information to help you choose between `SimpleRabbitListenerContainerFactory` and `DirectRabbitListenerContainerFactory`, see <<choose-container>>.
 
+Starting wih version 2.2.2, you can provide a `ContainerCustomizer` implementation (as shown above).
+This can be used to further configure the container after it has been created and configured; you can use this, for example, to set properties that are not exposed by the container factory.
+
 By default, the infrastructure looks for a bean named `rabbitListenerContainerFactory` as the source for the factory to use to create message listener containers.
 In this case, and ignoring the RabbitMQ infrastructure setup, the `processOrder` method can be invoked with a core poll size of three threads and a maximum pool size of ten threads.
 
@@ -2160,6 +2321,8 @@ The default is required only if at least one endpoint is registered without a sp
 See the https://docs.spring.io/spring-amqp/docs/latest-ga/api/org/springframework/amqp/rabbit/annotation/RabbitListenerConfigurer.html[Javadoc] for full details and examples.
 
 The container factories provide methods for adding `MessagePostProcessor` instances that are applied after receiving messages (before invoking the listener) and before sending replies.
+
+See <<async-annotation-driven-reply>> for information about replies.
 
 Starting with version 2.0.6, you can add a `RetryTemplate` and `RecoveryCallback` to the listener container factory.
 It is used when sending replies.
@@ -2281,6 +2444,25 @@ public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory() {
 This configures a Jackson2 converter that expects header information to be present to guide the conversion.
 
 You can also use a `ContentTypeDelegatingMessageConverter`, which can handle conversion of different content types.
+
+Starting with version 2.3, you can override the factory converter by specifying a bean name in the `messageConverter` property.
+
+====
+[source, java]
+----
+@Bean
+public MessageConverter jsonConverter() {
+    return new Jackson2JsonMessageConverter();
+}
+
+@RabbitListener(..., messageConverter = "jsonConverter")
+public void listen(String in) {
+    ...
+}
+----
+====
+
+This avoids having to declare a different container factory just to change the converter.
 
 In most cases, it is not necessary to customize the method argument converter unless, for example, you want to use
 a custom `ConversionService`.
@@ -2492,7 +2674,7 @@ Each queue needed a separate property.
 ====== Reply Management
 
 The existing support in `MessageListenerAdapter` already lets your method have a non-void return type.
-When that is the case, the result of the invocation is encapsulated in a message sent either in the address specified in the `ReplyToAddress` header of the original message or in the default address configured on the listener.
+When that is the case, the result of the invocation is encapsulated in a message sent to the the address specified in the `ReplyToAddress` header of the original message, or to the default address configured on the listener.
 You can set that default address by using the `@SendTo` annotation of the messaging abstraction.
 
 Assuming our `processOrder` method should now return an `OrderStatus`, we can write it as follows to automatically send a reply:
@@ -2527,7 +2709,43 @@ public Message<OrderStatus> processOrder(Order order) {
 ----
 ====
 
-The `@SendTo` value is assumed as a reply `exchange` and `routingKey` pair that follws the `exchange/routingKey` pattern,
+Alternatively, you can use a `MessagePostProcessor` in the `beforeSendReplyMessagePostProcessors` container factory property to add more headers.
+Starting with version 2.2.3, the called bean/method is made avaiable in the reply message, which can be used in a message post processor to communicate the information back to the caller:
+
+====
+[source, java]
+----
+factory.setBeforeSendReplyPostProcessors(msg -> {
+    msg.getMessageProperties().setHeader("calledBean",
+            msg.getMessageProperties().getTargetBean().getClass().getSimpleName());
+    msg.getMessageProperties().setHeader("calledMethod",
+            msg.getMessageProperties().getTargetMethod().getName());
+    return m;
+});
+----
+====
+
+Starting with version 2.2.5, you can configure a `ReplyPostProcessor` to modify the reply message before it is sent; it is called after the `correlationId` header has been set up to match the request.
+
+====
+[source, java]
+----
+@RabbitListener(queues = "test.header", group = "testGroup", replyPostProcessor = "echoCustomHeader")
+public String capitalizeWithHeader(String in) {
+    return in.toUpperCase();
+}
+
+@Bean
+public ReplyPostProcessor echoCustomHeader() {
+    return (req, resp) -> {
+        resp.getMessageProperties().setHeader("myHeader", req.getMessageProperties().getHeader("myHeader"));
+        return resp;
+    };
+}
+----
+====
+
+The `@SendTo` value is assumed as a reply `exchange` and `routingKey` pair that follows the `exchange/routingKey` pattern,
 where one of those parts can be omitted.
 The valid values are as follows:
 
@@ -2610,6 +2828,63 @@ public String listen(Message in) {
 ----
 ====
 
+[[reply-content-type]]
+====== Reply ContentType
+
+If you are using a sophisticated message converter, such as the `ContentTypeDelegatingMessageConverter`, you can control the content type of the reply by setting the `replyContentType` property on the listener.
+This allows the converter to select the appropriate delegate converter for the reply.
+
+====
+[source, java]
+----
+@RabbitListener(queues = "q1", messageConverter = "delegating",
+        replyContentType = "application/json")
+public Thing2 listen(Thing1 in) {
+    ...
+}
+----
+====
+
+By default, for backwards compatibility, any content type property set by the converter will be overwritten by this value after conversion.
+Converters such as the `SimpleMessageConverter` use the reply type rather than the content type to determine the conversion needed and sets the content type in the reply message appropriately.
+This may not be the desired action and can be overridden by setting the `converterWinsContentType` property to `false`.
+For example, if you return a `String` containing JSON, the `SimpleMessageConverter` will set the content type in the reply to `text/plain`.
+The following configuration will ensure the content type is set properly, even if the `SimpleMessageConverter` is used.
+
+====
+[source, java]
+----
+@RabbitListener(queues = "q1", replyContentType = "application/json",
+        converterWinsContentType = "false")
+public String listen(Thing in) {
+    ...
+    return someJsonString;
+}
+----
+====
+
+These properties (`replyContentType` and `converterWinsContentType`) do not apply when the return type is a Spring AMQP `Message` or a Spring Messaging `Message<?>`.
+In the first case, there is no conversion involved; simply set the `contentType` message property.
+In the second case, the behavior is controlled using message headers:
+
+====
+[source, java]
+----
+@RabbitListener(queues = "q1", messageConverter = "delegating")
+@SendTo("q2")
+public Message<String> listen(String in) {
+    ...
+    return MessageBuilder.withPayload(in.toUpperCase())
+            .setHeader(MessageHeaders.CONTENT_TYPE, "application/xml")
+            .build();
+}
+----
+====
+
+This content type will be passed in the `MessageProperties` to the converter.
+By default, for backwards compatibility, any content type property set by the converter will be overwritten by this value after conversion.
+If you wish to override that behavior, also set the `AmqpHeaders.CONTENT_TYPE_CONVERTER_WINS` to `true` and any value set by the converter will be retained.
+
 [[annotation-method-selection]]
 ====== Multi-method Listeners
 
@@ -2667,7 +2942,6 @@ This means that the annotation can appear on the same annotated element (method 
 In this case, a separate listener container is created for each annotation, each of which invokes the same listener
 `@Bean`.
 Repeatable annotations can be used with Java 8 or above.
-When using Java 7 or earlier, you can achieve the same effect by using the `@RabbitListeners` "`container`" annotation, with an array of `@RabbitListener` annotations.
 
 ====== Proxy `@RabbitListener` and Generics
 
@@ -2756,6 +3030,21 @@ If you use JSON, consider using an `errorHandler` to return some other Jackson-f
 
 IMPORTANT: In version 2.1, this interface moved from package `o.s.amqp.rabbit.listener` to `o.s.amqp.rabbit.listener.api`.
 
+Starting with version 2.1.7, the `Channel` is available in a messaging message header; this allows you to ack or nack the failed messasge when using `AcknowledgeMode.MANUAL`:
+
+====
+[source, java]
+----
+public Object handleError(Message amqpMessage, org.springframework.messaging.Message<?> message,
+          ListenerExecutionFailedException exception) {
+              ...
+              message.getHeaders().get(AmqpHeaders.CHANNEL, Channel.class)
+                  .basicReject(message.getHeaders().get(AmqpHeaders.DELIVERY_TAG, Long.class),
+                               true);
+          }
+----
+====
+
 ====== Container Management
 
 Containers created for annotations are not registered with the application context.
@@ -2804,7 +3093,7 @@ public void listen2(List<Message<Thing>> in) {
 ----
 ====
 
-Setting the `batchListener` property to true automatically turns off the `debatchingEnabled` container property in containers that the factory creates - effectively, the debatching is moved from the container to the listener adapter and the adapter creates the list that is passed to the listener.
+Setting the `batchListener` property to true automatically turns off the `deBatchingEnabled` container property in containers that the factory creates (unless `consumerBatchEnabled` is `true` - see below). Effectively, the debatching is moved from the container to the listener adapter and the adapter creates the list that is passed to the listener.
 
 A batch-enabled factory cannot be used with a <<annotation-method-selection, multi-method listener>>.
 
@@ -2812,6 +3101,59 @@ Also starting with version 2.2. when receiving batched messages one-at-a-time, t
 This header can be obtained by adding the `@Header(AmqpHeaders.LAST_IN_BATCH)` boolean last` parameter to your listener method.
 The header is mapped from `MessageProperties.isLastInBatch()`.
 In addition, `AmqpHeaders.BATCH_SIZE` is populated with the size of the batch in every message fragment.
+
+In addition, a new property `consumerBatchEnabled` has been added to the `SimpleMessageListenerContainer`.
+When this is true, the container will create a batch of messages, up to `batchSize`; a partial batch is delivered if `receiveTimeout` elapses with no new messages arriving.
+If a producer-created batch is received, it is debatched and added to the consumer-side batch; therefore the actual number of messages delivered may exceed `batchSize`, which represents the number of messages received from the broker.
+`deBatchingEnabled` must be true when `consumerBatchEnabled` is true; the container factory will enforce this requirement.
+
+====
+[source, java]
+----
+@Bean
+public SimpleRabbitListenerContainerFactory consumerBatchContainerFactory() {
+    SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+    factory.setConnectionFactory(rabbitConnectionFactory());
+    factory.setConsumerTagStrategy(consumerTagStrategy());
+    factory.setBatchListener(true); // configures a BatchMessageListenerAdapter
+    factory.setBatchSize(2);
+    factory.setConsumerBatchEnabled(true);
+    return factory;
+}
+----
+====
+
+When using `consumerBatchEnabled` with `@RabbitListener`:
+
+====
+[source, java]
+----
+@RabbitListener(queues = "batch.1", containerFactory = "consumerBatchContainerFactory")
+public void consumerBatch1(List<Message> amqpMessages) {
+    this.amqpMessagesReceived = amqpMessages;
+    this.batch1Latch.countDown();
+}
+
+@RabbitListener(queues = "batch.2", containerFactory = "consumerBatchContainerFactory")
+public void consumerBatch2(List<org.springframework.messaging.Message<Invoice>> messages) {
+    this.messagingMessagesReceived = messages;
+    this.batch2Latch.countDown();
+}
+
+@RabbitListener(queues = "batch.3", containerFactory = "consumerBatchContainerFactory")
+public void consumerBatch3(List<Invoice> strings) {
+    this.batch3Strings = strings;
+    this.batch3Latch.countDown();
+}
+----
+====
+
+* the first is called with the raw, unconverted `org.springframework.amqp.core.Message` s received.
+* the second is called with the `org.springframework.messaging.Message<?>` s with converted payloads and mapped headers/properties.
+* the third is called with the converted payloads, with no access to headers/properteis.
+
+You can also add a `Channel` parameter, often used when using `MANUAL` ack mode.
+This is not very useful with the third example because you don't have access to the `delivery_tag` property.
 
 [[using-container-factories]]
 ===== Using Container Factories
@@ -2875,8 +3217,9 @@ Starting with version 2.1, `@RabbitListener` (and `@RabbitHandler`) methods can 
 
 IMPORTANT: The listener container factory must be configured with `AcknowledgeMode.MANUAL` so that the consumer thread will not ack the message; instead, the asynchronous completion will ack or nack the message when the async operation completes.
 When the async result is completed with an error, whether the message is requeued or not depends on the exception type thrown, the container configuration, and the container error handler.
-By default, the message will be requeued, unless the container's `defaultRequeueRejected` property is set to `false`.
+By default, the message will be requeued, unless the container's `defaultRequeueRejected` property is set to `false` (it is `true` by default).
 If the async result is completed with an `AmqpRejectAndDontRequeueException`, the message will not be requeued.
+If the container's `defaultRequeueRejected` property is `false`, you can override that by setting the future's exception to a `ImmediateRequeueException` and the message will be requeued.
 If some exception occurs within the listener method that prevents creation of the async result object, you MUST catch that exception and return an appropriate return object that will cause the message to be acknowledged or requeued.
 
 [[threading]]
@@ -2924,8 +3267,9 @@ The `concurrentConsumers` and associated properties are not available with this 
 
 The following features are available with the SMLC but not the DMLC:
 
-* `txSize`: With the SMLC, you can set this to control how many messages are delivered in a transaction or to reduce the number of acks, but it may cause the number of duplicate deliveries to increase after a failure.
-(The DMLC does have `messagesPerAck`, which you can use to reduce the acks, the same as with `txSize` and the SMLC, but it cannot be used with transactions -- each message is delivered and ack'd in a separate transaction).
+* `batchSize`: With the SMLC, you can set this to control how many messages are delivered in a transaction or to reduce the number of acks, but it may cause the number of duplicate deliveries to increase after a failure.
+(The DMLC does have `messagesPerAck`, which you can use to reduce the acks, the same as with `batchSize` and the SMLC, but it cannot be used with transactions -- each message is delivered and ack'd in a separate transaction).
+* `consumerBatchEnabled`: enables batching of discrete messages in the consumer; see <<containerAttributes>> for more information.
 * `maxConcurrentConsumers` and consumer scaling intervals or triggers -- there is no auto-scaling in the DMLC.
 It does, however, let you programmatically change the `consumersPerQueue` property and the consumers are adjusted accordingly.
 
@@ -3037,6 +3381,24 @@ Consequently, in the preceding example, we narrow the events received based on t
 CAUTION: If you wish to use the idle event to stop the lister container, you should not call `container.stop()` on the thread that calls the listener.
 Doing so always causes delays and unnecessary log messages.
 Instead, you should hand off the event to a different thread that can then stop the container.
+
+[[micrometer]]
+===== Monitoring Listener Performance
+
+Starting with version 2.2, the listener containers will automatically create and update Micrometer `Timer` s for the listener, if `Micrometer` is detected on the class path, and a `MeterRegistry` is present in the application context.
+The timers can be disabled by setting the container property `micrometerEnabled` to `false`.
+
+Two timers are maintained - one for successful calls to the listener and one for failures.
+With a simple `MessageListener`, there is a pair of timers for each configured queue.
+
+The timers are named `spring.rabbitmq.listener` and have the following tags:
+
+* `listenerId` : (listener id or container bean name)
+* `queue` : (the queue name for a simple listener or list of configured queue names when `consumerBatchEnabled` is `true` - because a batch may contain messages from multiple queues)
+* `result` : `success` or `failure`
+* `exception` : `none` or `ListenerExecutionFailedException`
+
+You can add additional tags using the `micrometerTags` container property.
 
 [[containers-and-broker-named-queues]]
 ==== Containers and Broker-Named queues
@@ -3287,7 +3649,9 @@ for convenience.)
 If you inject a custom type mapper, you should set the property on the mapper instead.
 
 NOTE: When converting from the `Message`, an incoming `MessageProperties.getContentType()` must be JSON-compliant (`contentType.contains("json")` is used to check).
-Otherwise, a `WARN` log message `Could not convert incoming message with content-type [...]`, is emitted and `message.getBody()` is returned as is -- as a `byte[]`.
+Starting with version 2.2, `application/json` is assumed if there is no `contentType` property, or it has the default value `application/octet-stream`.
+To revert to the previous behavior (return an unconverted `byte[]`), set the converter's `assumeSupportedContentType` property to `false`.
+If the content type is not supported, a `WARN` log message `Could not convert incoming message with content-type [...]`, is emitted and `message.getBody()` is returned as is -- as a `byte[]`.
 So, to meet the `Jackson2JsonMessageConverter` requirements on the consumer side, the producer must add the `contentType` message property -- for example, as `application/json` or `text/x-json` or by using the `Jackson2JsonMessageConverter`, which sets the header automatically.
 The following listing shows a number of converter calls:
 
@@ -3328,6 +3692,15 @@ converter to determine the type.
 
 IMPORTANT: Starting with version 1.6.11, `Jackson2JsonMessageConverter` and, therefore, `DefaultJackson2JavaTypeMapper` (`DefaultClassMapper`) provide the `trustedPackages` option to overcome https://pivotal.io/security/cve-2017-4995[Serialization Gadgets] vulnerability.
 By default and for backward compatibility, the `Jackson2JsonMessageConverter` trusts all packages -- that is, it uses `*` for the option.
+
+[[jackson-abstract]]
+====== Deserializing Abstract Classes
+
+Prior to version 2.2.8, if the inferred type of a `@RabbitListener` was an abstract class (including interfaces), the converter would fall back to looking for type information in the headers and, if present, used that information; if that was not present, it would try to create the abstract class.
+This caused a problem when a custom `ObjectMapper` that is configured with a custom deserializer to handle the abstract class is used, but the incoming message has invalid type headers.
+
+Starting with version 2.2.8, the previous behavior is retained by default. If you have such a custom `ObjectMapper` and you want to ignore type headers, and always use the inferred type for conversion, set the `alwaysConvertToInferredType` to `true`.
+This is needed for backwards compatibility and to avoid the overhead of an attempted conversion when it would fail (with a standard `ObjectMapper`).
 
 [[data-projection]]
 ====== Using Spring Data Projection Interfaces
@@ -3410,6 +3783,7 @@ The following example shows how to configure a `MarshallingMessageConverter`:
 ----
 ====
 
+[[jackson2xml]]
 ===== `Jackson2XmlMessageConverter`
 
 This class was introduced in version 2.1 and can be used to convert messages from and to XML.
@@ -3435,6 +3809,9 @@ The following example configures a `Jackson2JsonMessageConverter`:
 </bean>
 ----
 See <<json-message-converter>> for more information.
+
+NOTE: Starting with version 2.2, `application/xml` is assumed if there is no `contentType` property, or it has the default value `application/octet-stream`.
+To revert to the previous behavior (return an unconverted `byte[]`), set the converter's `assumeSupportedContentType` property to `false`.
 
 ===== `ContentTypeDelegatingMessageConverter`
 
@@ -3470,14 +3847,14 @@ consider configuring which packages and classes are allowed to be deserialized.
 This applies to both the `SimpleMessageConverter` and `SerializerMessageConverter` when it is configured to use a
 `DefaultDeserializer` either implicitly or via configuration.
 
-By default, the white list is empty, meaning all classes are deserialized.
+By default, the allowed list is empty, meaning all classes are deserialized.
 
 You can set a list of patterns, such as `thing1.*`, `thing1.thing2.Cat` or `*.MySafeClass`.
 
 The patterns are checked in order until a match is found.
 If there is no match, a `SecurityException` is thrown.
 
-You can set the patterns using the `whiteListPatterns` property on these converters.
+You can set the patterns using the `allowedListPatterns` property on these converters.
 ====
 
 [[message-properties-converters]]
@@ -3544,6 +3921,9 @@ Also, the inbound `userId` property is no longer mapped to `MessageProperties.us
 It is mapped to `MessageProperties.receivedUserId` instead.
 These changes are to avoid unexpected propagation of these properties if the same `MessageProperties` object is used for an outbound message.
 
+Starting with version 2.2, the `DefaultMessagePropertiesConverter` converts any custom headers with values of type `Class<?>`  using `getName()` instead of `toString()`; this avoids consuming application having to parse the class name out of the `toString()` representation.
+For rolling upgrades, you may need to change your consumers to understand both formats until all producers are upgraded.
+
 [[post-processing]]
 ==== Modifying Messages - Compression and More
 
@@ -3559,12 +3939,18 @@ When using batching (see <<template-batching>>), this is invoked after the batch
 The second is invoked immediately after a message is received.
 
 These extension points are used for such features as compression and, for this purpose, several `MessagePostProcessor` implementations are provided.
-`GZipPostProcessor` and `ZipPostProcessor` compress messages before sending, and `GUnzipPostProcessor` and `UnzipPostProcessor` decompress received messages.
+`GZipPostProcessor`, `ZipPostProcessor` and `DeflaterPostProcessor` compress messages before sending, and `GUnzipPostProcessor`, `UnzipPostProcessor` and `InflaterPostProcessor` decompress received messages.
 
 NOTE: Starting with version 2.1.5, the `GZipPostProcessor` can be configured with the `copyProperties = true` option to make a  copy of the original message properties.
 By default, these properties are reused for performance reasons, and modified with compression content encoding and the optional `MessageProperties.SPRING_AUTO_DECOMPRESS` header.
 If you retain a reference to the original outbound message, its properties will change as well.
 So, if your application retains a copy of an outbound message with these message post processors, consider turning the `copyProperties` option on.
+
+IMPORTANT: Starting with version 2.2.12, you can configure the delimiter that the compressing post processors use between content encoding elements.
+With versions 2.2.11 and before, this was hard-coded as `:`, it is now set to `, ` by default.
+The decompressors will work with both delimiters.
+However, if you publish messages with 2.3 or later and consume with 2.2.11 or earlier, you MUST set the `encodingDelimiter` property on the compressor(s) to `:`.
+When your consumers are upgraded to 2.2.11 or later, you can revert to the default of `, `.
 
 Similarly, the `SimpleMessageListenerContainer` also has a `setAfterReceivePostProcessors()` method, letting the decompression be performed after messages are received by the container.
 
@@ -3898,34 +4284,34 @@ The following listing shows sample client and server configurations:
 [source,xml]
 ----
 <bean id="client"
-	class="org.springframework.amqp.remoting.client.AmqpProxyFactoryBean">
-	<property name="amqpTemplate" ref="template" />
-	<property name="serviceInterface" value="foo.ServiceInterface" />
+    class="org.springframework.amqp.remoting.client.AmqpProxyFactoryBean">
+    <property name="amqpTemplate" ref="template" />
+    <property name="serviceInterface" value="foo.ServiceInterface" />
 </bean>
 
 <rabbit:connection-factory id="connectionFactory" />
 
 <rabbit:template id="template" connection-factory="connectionFactory" reply-timeout="2000"
-	routing-key="remoting.binding" exchange="remoting.exchange" />
+    routing-key="remoting.binding" exchange="remoting.exchange" />
 
 <rabbit:admin connection-factory="connectionFactory" />
 
 <rabbit:queue name="remoting.queue" />
 
 <rabbit:direct-exchange name="remoting.exchange">
-	<rabbit:bindings>
-		<rabbit:binding queue="remoting.queue" key="remoting.binding" />
-	</rabbit:bindings>
+    <rabbit:bindings>
+        <rabbit:binding queue="remoting.queue" key="remoting.binding" />
+    </rabbit:bindings>
 </rabbit:direct-exchange>
 ----
 
 [source,xml]
 ----
 <bean id="listener"
-	class="org.springframework.amqp.remoting.service.AmqpInvokerServiceExporter">
-	<property name="serviceInterface" value="foo.ServiceInterface" />
-	<property name="service" ref="service" />
-	<property name="amqpTemplate" ref="template" />
+    class="org.springframework.amqp.remoting.service.AmqpInvokerServiceExporter">
+    <property name="serviceInterface" value="foo.ServiceInterface" />
+    <property name="service" ref="service" />
+    <property name="amqpTemplate" ref="template" />
 </bean>
 
 <bean id="service" class="foo.ServiceImpl" />
@@ -3937,7 +4323,7 @@ The following listing shows sample client and server configurations:
 <rabbit:queue name="remoting.queue" />
 
 <rabbit:listener-container connection-factory="connectionFactory">
-	<rabbit:listener ref="listener" queue-names="remoting.queue" />
+    <rabbit:listener ref="listener" queue-names="remoting.queue" />
 </rabbit:listener-container>
 ----
 ====
@@ -4347,6 +4733,38 @@ Starting with version 2.0, the `ExchangeBuilder` now creates durable exchanges b
 To make a non-durable exchange with the builder, use `.durable(false)` before invoking `.build()`.
 The `durable()` method with no parameter is no longer provided.
 
+Version 2.2 introduced fluent APIs to add "well known" exchange and queue arguments...
+
+====
+[source, java]
+----
+@Bean
+public Queue allArgs1() {
+    return QueueBuilder.nonDurable("all.args.1")
+            .ttl(1000)
+            .expires(200_000)
+            .maxLength(42)
+            .maxLengthBytes(10_000)
+            .overflow(Overflow.rejectPublish)
+            .deadLetterExchange("dlx")
+            .deadLetterRoutingKey("dlrk")
+            .maxPriority(4)
+            .lazy()
+            .masterLocator(MasterLocator.minMasters)
+            .singleActiveConsumer()
+            .build();
+}
+
+@Bean
+public DirectExchange ex() {
+    return ExchangeBuilder.directExchange("ex.with.alternate")
+            .durable(true)
+            .alternate("alternate")
+            .build();
+}
+----
+====
+
 [[collection-declaration]]
 ===== Declaring Collections of Exchanges, Queues, and Bindings
 
@@ -4372,17 +4790,17 @@ public static class Config {
 
     @Bean
     public DirectExchange e1() {
-    	return new DirectExchange("e1", false, true);
+        return new DirectExchange("e1", false, true);
     }
 
     @Bean
     public Queue q1() {
-    	return new Queue("q1", false, false, true);
+        return new Queue("q1", false, false, true);
     }
 
     @Bean
     public Binding b1() {
-    	return BindingBuilder.bind(q1()).to(e1()).with("k1");
+        return BindingBuilder.bind(q1()).to(e1()).with("k1");
     }
 
     @Bean
@@ -4429,10 +4847,28 @@ This can cause undesirable side effects in some cases, because the admin has to 
 This feature is now disabled in favor of `Declarables`, as discussed earlier in this section.
 You can revert to the previous behavior by setting the `RabbitAdmin` property called `declareCollections` to `true`.
 
+Version 2.2 added the `getDeclarablesByType` method to `Declarables`; this can be used as a convenience, for example, when declaring the listener container bean(s).
+
+====
+[source, java]
+----
+public SimpleMessageListenerContainer container(ConnectionFactory connectionFactory,
+        Declarables mixedDeclarables, MessageListener listener) {
+
+    SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory);
+    container.setQueues(mixedDeclarables.getDeclarablesByType(Queue.class).toArray(new Queue[0]));
+    container.setMessageListener(listener);
+    return container;
+}
+----
+====
+
 [[conditional-declaration]]
 ===== Conditional Declaration
 
 By default, all queues, exchanges, and bindings are declared by all `RabbitAdmin` instances (assuming they have `auto-startup="true"`) in the application context.
+
+Starting with version 2.1.9, the `RabbitAdmin` has a new property `explicitDeclarationsOnly` (which is `false` by default); when this is set to `true`, the admin will only declare beans that are explicitly configured to be declared by that admin.
 
 NOTE: Starting with the 1.2 release, you can conditionally declare these elements.
 This is particularly useful when an application connects to multiple brokers and needs to specify with which brokers a particular element should be declared.
@@ -4449,23 +4885,25 @@ The properties are available as attributes in the namespace, as shown in the fol
 
 <rabbit:admin id="admin2" connection-factory="CF2" />
 
-<rabbit:queue id="declaredByBothAdminsImplicitly" />
+<rabbit:admin id="admin3" connection-factory="CF3" explicit-declarations-only="true" />
 
-<rabbit:queue id="declaredByBothAdmins" declared-by="admin1, admin2" />
+<rabbit:queue id="declaredByAdmin1AndAdmin2Implicitly" />
+
+<rabbit:queue id="declaredByAdmin1AndAdmin2" declared-by="admin1, admin2" />
 
 <rabbit:queue id="declaredByAdmin1Only" declared-by="admin1" />
 
-<rabbit:queue id="notDeclaredByAny" auto-declare="false" />
+<rabbit:queue id="notDeclaredByAllExceptAdmin3" auto-declare="false" />
 
 <rabbit:direct-exchange name="direct" declared-by="admin1, admin2">
-	<rabbit:bindings>
-		<rabbit:binding key="foo" queue="bar"/>
-	</rabbit:bindings>
+    <rabbit:bindings>
+        <rabbit:binding key="foo" queue="bar"/>
+    </rabbit:bindings>
 </rabbit:direct-exchange>
 ----
 ====
 
-NOTE: By default, the `auto-declare` attribute is `true` and, if the `declared-by` is not supplied (or is empty), then all `RabbitAdmin` instances declare the object (as long as the admin's `auto-startup` attribute is `true`, the default).
+NOTE: By default, the `auto-declare` attribute is `true` and, if the `declared-by` is not supplied (or is empty), then all `RabbitAdmin` instances declare the object (as long as the admin's `auto-startup` attribute is `true`, the default, and the admin's `explicit-declarations-only` attribute is false).
 
 Similarly, you can use Java-based `@Configuration` to achieve the same effect.
 In the following example, the components are declared by `admin1` but not by`admin2`:
@@ -4750,6 +5188,11 @@ A common pattern for handling DLQ messages is to set a `time-to-live` on those m
 The problem with this technique is that messages that cause fatal exceptions loop forever.
 Starting with version 2.1, the `ConditionalRejectingErrorHandler` detects an `x-death` header on a message that causes a fatal exception to be thrown.
 The message is logged and discarded.
+You can revert to the previous behavior by setting the `discardFatalsWithXDeath` property on the `ConditionalRejectingErrorHandler` to `false`.
+
+IMPORTANT: Starting with version 2.1.9, messages with these fatal exceptions are rejected and NOT requeued by default, even if the container acknowledge mode is MANUAL.
+These exceptions generally occur before the listener is invoked so the listener does not have a chance to ack or nack the message so it remained in the queue in an un-acked state.
+To revert to the previous behavior, set the `rejectManual` property on the `ConditionalRejectingErrorHandler` to `false`.
 
 [[transactions]]
 ==== Transactions
@@ -4919,35 +5362,27 @@ Some properties are not exposed by the namespace.
 These are indicated by `N/A` for the attribute.
 
 .Configuration options for a message listener container
-[cols="8l,16,3,3", options="header"]
+[cols="6l,16,1,1", options="header"]
 |===
-| Property
+|Property
 (Attribute)
-| Description
-| SMLC
-| DMLC
+|Description
+|SMLC
+|DMLC
 
-| (group)
+|ackTimeout
+(N/A)
 
-| This is available only when using the namespace.
-When specified, a bean of type `Collection<MessageListenerContainer>` is registered with this name, and the
-container for each `<listener/>` element is added to the collection.
-This allows, for example, starting and stopping the group of containers by iterating over the collection.
-If multiple `<listener-container/>` elements have the same group value, the containers in the collection form
-an aggregate of all containers so designated.
+|When `messagesPerAck` is set, this timeout is used as an alternative to send an ack.
+When a new message arrives, the count of unacked messages is compared to `messagesPerAck`, and the time since the last ack is compared to this value.
+If either condition is `true`, the message is acknowledged.
+When no new messages arrive and there are unacked messages, this timeout is approximate since the condition is only checked each `monitorInterval`.
+See also `messagesPerAck` and `monitorInterval` in this table.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|
+a|image::images/tickmark.png[]
 
-| channelTransacted
-(channel-transacted)
-
-| Boolean flag to signal that all messages should be acknowledged in a transaction (either manually or automatically).
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| acknowledgeMode
+|acknowledgeMode
 (acknowledge)
 
 a|
@@ -4957,74 +5392,322 @@ RabbitMQ calls this "`autoack`", because the broker assumes all messages are ack
 * `AUTO`: The container acknowledges the message automatically, unless the `MessageListener` throws an exception.
 Note that `acknowledgeMode` is complementary to `channelTransacted` -- if the channel is transacted, the broker requires a commit notification in addition to the ack.
 This is the default mode.
-See also `txSize`.
+See also `batchSize`.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| transactionManager
-(transaction-manager)
+|adviceChain
+(advice-chain)
 
-| External transaction manager for the operation of the listener.
-Also complementary to `channelTransacted` -- if the `Channel` is transacted, its transaction is synchronized with the external transaction.
+|An array of AOP Advice to apply to the listener execution.
+This can be used to apply additional cross-cutting concerns, such as automatic retry in the event of broker death.
+Note that simple re-connection after an AMQP error is handled by the `CachingConnectionFactory`, as long as the broker is still alive.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| prefetchCount
-(prefetch)
-
-a| The number of unacknowledged messages that can be outstanding at each consumer.
-The higher this value is, the faster the messages can be delivered, but the higher the risk of non-sequential processing.
-Ignored if the `acknowledgeMode` is `NONE`.
-This is increased, if necessary, to match the `txSize` or `messagePerAck`.
-Defaults to 250 since 2.0.
-You can set it to 1 to revert to the previous behavior.
-
-IMPORTANT: There are scenarios where the prefetch value should
-be low -- for example, with large messages, especially if the processing is slow (messages could add up
-to a large amount of memory in the client process), and if strict message ordering is necessary
-(the prefetch value should be set back to 1 in this case).
-Also, with low-volume messaging and multiple consumers (including concurrency within a single listener container instance), you may wish to reduce the prefetch to get a more even distribution of messages across consumers.
-
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| shutdownTimeout
+|afterReceivePostProcessors
 (N/A)
 
-| When a container shuts down (for example,
-if its enclosing `ApplicationContext` is closed), it waits for in-flight messages to be processed up to this limit.
-Defaults to five seconds.
+|An array of `MessagePostProcessor` instances that are invoked before invoking the listener.
+Post processors can implement `PriorityOrdered` or `Ordered`.
+The array is sorted with un-ordered members invoked last.
+If a post processor returns `null`, the message is discarded (and acknowledged, if appropriate).
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| forceCloseChannel
+|alwaysRequeueWith
+TxManagerRollback
 (N/A)
 
-| If the consumers do not respond to a shutdown within `shutdownTimeout`, if this is `true`, the channel will be closed, causing any unacked messages to be requeued.
+|Set to `true` to always requeue messages on rollback when a transaction manager is configured.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|autoDeclare
+(auto-declare)
+
+a|When set to `true` (default), the container uses a `RabbitAdmin` to redeclare all AMQP objects (queues, exchanges, bindings), if it detects that at least one of its queues is missing during startup, perhaps because it is an `auto-delete` or an expired queue, but the redeclaration proceeds if the queue is missing for any reason.
+To disable this behavior, set this property to `false`.
+Note that the container fails to start if all of its queues are missing.
+
+NOTE: Prior to version 1.6, if there was more than one admin in the context, the container would randomly select one.
+If there were no admins, it would create one internally.
+In either case, this could cause unexpected results.
+Starting with version 1.6, for `autoDeclare` to work, there must be exactly one `RabbitAdmin` in the context, or a reference to a specific instance must be configured on the container using the `rabbitAdmin` property.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|autoStartup
+(auto-startup)
+
+|Flag to indicate that the container should start when the `ApplicationContext` does (as part of the `SmartLifecycle` callbacks, which happen after all beans are initialized).
+Defaults to `true`, but you can set it to `false` if your broker might not be available on startup and call `start()` later manually when you know the broker is ready.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|batchSize
+(transaction-size)
+(batch-size)
+
+|When used with `acknowledgeMode` set to `AUTO`, the container tries to process up to this number of messages before sending an ack (waiting for each one up to the receive timeout setting).
+This is also when a transactional channel is committed.
+If the `prefetchCount` is less than the `batchSize`, it is increased to match the `batchSize`.
+
+a|image::images/tickmark.png[]
+a|
+
+|batchingStrategy
+(N/A)
+
+|The strategy used when debatchng messages.
+Default `SimpleDebatchingStrategy`.
+See <<template-batching>> and <<receiving-batch>>.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|channelTransacted
+(channel-transacted)
+
+|Boolean flag to signal that all messages should be acknowledged in a transaction (either manually or automatically).
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|concurrency
+(N/A)
+
+|`m-n` The range of concurrent consumers for each listener (min, max).
+If only `n` is provided, `n` is a fixed number of consumers.
+See <<listener-concurrency>>.
+
+a|image::images/tickmark.png[]
+a|
+
+|concurrentConsumers
+(concurrency)
+
+|The number of concurrent consumers to initially start for each listener.
+See <<listener-concurrency>>.
+
+a|image::images/tickmark.png[]
+a|
+
+|connectionFactory
+(connection-factory)
+
+|A reference to the `ConnectionFactory`.
+When configuring byusing the XML namespace, the default referenced bean name is `rabbitConnectionFactory`.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|consecutiveActiveTrigger
+(min-consecutive-active)
+
+|The minimum number of consecutive messages received by a consumer, without a receive timeout occurring, when considering starting a new consumer.
+Also impacted by 'batchSize'.
+See <<listener-concurrency>>.
+Default: 10.
+
+a|image::images/tickmark.png[]
+a|
+
+|consecutiveIdleTrigger
+(min-consecutive-idle)
+
+|The minimum number of receive timeouts a consumer must experience before considering stopping a consumer.
+Also impacted by 'batchSize'.
+See <<listener-concurrency>>.
+Default: 10.
+
+a|image::images/tickmark.png[]
+a|
+
+|consumerBatchEnabled
+(batch-enabled)
+
+|If the `MessageListener` supports it, setting this to true enables batching of discrete messages, up to `batchSize`; a partial batch will be delivered if no new messages arrive in `receiveTimeout`.
+When this is false, batching is only supported for batches created by a producer; see <<template-batching>>.
+
+a|image::images/tickmark.png[]
+a|
+
+|consumerStartTimeout
+(N/A)
+
+|The time in milliseconds to wait for a consumer thread to start.
+If this time elapses, an error log is written.
+An example of when this might happen is if a configured `taskExecutor` has insufficient threads to support the container `concurrentConsumers`.
+
+See <<threading>>.
+Default: 60000 (one minute).
+
+a|image::images/tickmark.png[]
+a|
+
+|consumerTagStrategy
+(consumer-tag-strategy)
+
+|Set an implementation of <<consumerTags, ConsumerTagStrategy>>, enabling the creation of a (unique) tag for each consumer.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|consumersPerQueue
+(consumers-per-queue)
+
+|The number of consumers to create for each configured queue.
+See <<listener-concurrency>>.
+
+a|
+a|image::images/tickmark.png[]
+
+|consumeDelay
+(N/A)
+
+|When using the https://github.com/rabbitmq/rabbitmq-sharding[RabbitMQ Sharding Plugin] with `concurrentConsumers > 1`, there is a race condition that can prevent even distribution of the consumers across the shards.
+Use this property to add a small delay between consumer starts to avoid this race condition.
+You should experiment with values to determine the suitable delay for your environment.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|debatchingEnabled
+(N/A)
+
+|When true, the listener container will debatch batched messages and invoke the listener with each message from the batch.
+Starting with version 2.2.7, <<template-batching,producer created batches>> will be debatched as a `List<Message>` if the listener is a `BatchMessageListener` or `ChannelAwareBatchMessageListener`.
+Otherwise messages from the batch are presented one-at-a-time.
+Default true.
+See <<template-batching>> and <<receiving-batch>>.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|declarationRetries
+(declaration-retries)
+
+|The number of retry attempts when passive queue declaration fails.
+Passive queue declaration occurs when the consumer starts or, when consuming from multiple queues, when not all queues were available during initialization.
+When none of the configured queues can be passively declared (for any reason) after the retries are exhausted, the container behavior is controlled by the 'missingQueuesFatal` property, described earlier.
+Default: Three retries (for a total of four attempts).
+
+a|image::images/tickmark.png[]
+a|
+
+|defaultRequeueRejected
+(requeue-rejected)
+
+|Determines whether messages that are rejected because the listener threw an exception should be requeued or not.
+Default: `true`.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|errorHandler
+(error-handler)
+
+|A reference to an `ErrorHandler` strategy for handling any uncaught exceptions that may occur during the execution of the MessageListener.
+Default: `ConditionalRejectingErrorHandler`
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|exclusive
+(exclusive)
+
+|Determines whether the single consumer in this container has exclusive access to the queues.
+The concurrency of the container must be 1 when this is `true`.
+If another consumer has exclusive access, the container tries to recover the consumer, according to the
+`recovery-interval` or `recovery-back-off`.
+When using the namespace, this attribute appears on the `<rabbit:listener/>` element along with the queue names.
+Default: `false`.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|exclusiveConsumer
+ExceptionLogger
+(N/A)
+
+|An exception logger used when an exclusive consumer cannot gain access to a queue.
+By default, this is logged at the `WARN` level.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|failedDeclaration
+RetryInterval
+(failed-declaration
+-retry-interval)
+
+|The interval between passive queue declaration retry attempts.
+Passive queue declaration occurs when the consumer starts or, when consuming from multiple queues, when not all queues were available during initialization.
+Default: 5000 (five seconds).
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|forceCloseChannel
+(N/A)
+
+|If the consumers do not respond to a shutdown within `shutdownTimeout`, if this is `true`, the channel will be closed, causing any unacked messages to be requeued.
 Defaults to `true` since 2.0.
 You can set it to `false` to revert to the previous behavior.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| txSize
-(transaction-size)
+|(group)
 
-| When used with `acknowledgeMode` set to `AUTO`, the container tries to process up to this number of messages before sending an ack (waiting for each one up to the receive timeout setting).
-This is also when a transactional channel is committed.
-If the `prefetchCount` is less than the `txSize`, it is increased to match the `txSize`.
+|This is available only when using the namespace.
+When specified, a bean of type `Collection<MessageListenerContainer>` is registered with this name, and the
+container for each `<listener/>` element is added to the collection.
+This allows, for example, starting and stopping the group of containers by iterating over the collection.
+If multiple `<listener-container/>` elements have the same group value, the containers in the collection form
+an aggregate of all containers so designated.
 
-a| image::images/tickmark.png[]
-a|
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| messagesPerAck
+|idleEventInterval
+(idle-event-interval)
+
+|See <<idle-containers>>.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|javaLangErrorHandler
 (N/A)
 
-| The number of messages to receive between acks.
+|An `AbstractMessageListenerContainer.JavaLangErrorHandler` implementation that is called when a container thread catches an `Error`.
+The default implementation calls `System.exit(99)`; to revert to the previous behavior (do nothing), add a no-op handler.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|maxConcurrentConsumers
+(max-concurrency)
+
+|The maximum number of concurrent consumers to start, if needed, on demand.
+Must be greater than or equal to 'concurrentConsumers'.
+See <<listener-concurrency>>.
+
+a|image::images/tickmark.png[]
+a|
+
+|messagesPerAck
+(N/A)
+
+|The number of messages to receive between acks.
 Use this to reduce the number of acks sent to the broker (at the cost of increasing the possibility of redelivered messages).
 Generally, you should set this property only on high-volume listener containers.
 If this is set and a message is rejected (exception thrown), pending acks are acknowledged and the failed message is rejected.
@@ -5034,238 +5717,36 @@ Default: ack every message.
 See also `ackTimeout` in this table.
 
 a|
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| ackTimeout
-(N/A)
+|mismatchedQueuesFatal
+(mismatched-queues-fatal)
 
-| When `messagesPerAck` is set, this timeout is used as an alternative to send an ack.
-When a new message arrives, the count of unacked messages is compared to `messagesPerAck`, and the time since the last ack is compared to this value.
-If either condition is `true`, the message is acknowledged.
-When no new messages arrive and there are unacked messages, this timeout is approximate since the condition is only checked each `monitorInterval`.
-See also `messagesPerAck` and `monitorInterval` in this table.
+a|When the container starts, if this property is `true` (default: `false`), the container checks that all queues declared in the context are compatible with queues already on the broker.
+If mismatched properties (such as `auto-delete`) or arguments (skuch as `x-message-ttl`) exist, the container (and application context) fails to start with a fatal exception.
 
-a|
-a| image::images/tickmark.png[]
+If the problem is detected during recovery (for example, after a lost connection), the container is stopped.
 
-| receiveTimeout
-(receive-timeout)
+There must be a single `RabbitAdmin` in the application context (or one specifically configured on the container by using the `rabbitAdmin` property).
+Otherwise, this property must be `false`.
 
-| The maximum time to wait for each message.
-If `acknowledgeMode=NONE`, this has very little effect -- the container spins round and asks for another message.
-It has the biggest effect for a transactional `Channel` with `txSize > 1`, since it can cause messages already consumed not to be acknowledged until the timeout expires.
+NOTE: If the broker is not available during initial startup, the container starts and the conditions are checked when the connection is established.
 
-a| image::images/tickmark.png[]
-a|
+IMPORTANT: The check is done against all queues in the context, not just the queues that a particular listener is configured to use.
+If you wish to limit the checks to just those queues used by a container, you should configure a separate `RabbitAdmin` for the container, and provide a reference to it using the `rabbitAdmin` property.
+See <<conditional-declaration>> for more information.
 
-| autoStartup
-(auto-startup)
+IMPORTANT: Mismatched queue argument detection is disabled while starting a container for a `@RabbitListener` in a bean that is marked `@Lazy`.
+This is to avoid a potential deadlock which can delay the start of such containers for up to 60 seconds.
+Applications using lazy listener beans should check the queue arguments before getting a reference to the lazy bean.
 
-| Flag to indicate that the container should start when the `ApplicationContext` does (as part of the `SmartLifecycle` callbacks, which happen after all beans are initialized).
-Defaults to `true`, but you can set it to `false` if your broker might not be available on startup and call `start()` later manually when you know the broker is ready.
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| phase
-(phase)
-
-| When `autoStartup` is `true`, the lifecycle phase within which this container should start and stop.
-The lower the value, the earlier this container starts and the later it stops.
-The default is `Integer.MAX_VALUE`, meaning the container starts as late as possible and stops as soon as possible.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| adviceChain
-(advice-chain)
-
-| An array of AOP Advice to apply to the listener execution.
-This can be used to apply additional cross-cutting concerns, such as automatic retry in the event of broker death.
-Note that simple re-connection after an AMQP error is handled by the `CachingConnectionFactory`, as long as the broker is still alive.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| taskExecutor
-(task-executor)
-
-| A reference to a Spring `TaskExecutor` (or standard JDK 1.5+ `Executor`) for executing listener invokers.
-Default is a `SimpleAsyncTaskExecutor`, using internally managed threads.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| errorHandler
-(error-handler)
-
-| A reference to an `ErrorHandler` strategy for handling any uncaught exceptions that may occur during the execution of the MessageListener.
-Default: `ConditionalRejectingErrorHandler`
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| consumersPerQueue
-(consumers-per-queue)
-
-| The number of consumers to create for each configured queue.
-See <<listener-concurrency>>.
-
-a|
-a| image::images/tickmark.png[]
-
-| concurrentConsumers
-(concurrency)
-
-| The number of concurrent consumers to initially start for each listener.
-See <<listener-concurrency>>.
-
-a| image::images/tickmark.png[]
-a|
-
-| maxConcurrentConsumers
-(max-concurrency)
-
-| The maximum number of concurrent consumers to start, if needed, on demand.
-Must be greater than or equal to 'concurrentConsumers'.
-See <<listener-concurrency>>.
-
-a| image::images/tickmark.png[]
-a|
-
-| concurrency
-(N/A)
-
-| `m-n` The range of concurrent consumers for each listener (min, max).
-If only `n` is provided, `n` is a fixed number of consumers.
-See <<listener-concurrency>>.
-
-a| image::images/tickmark.png[]
-a|
-
-| consumerStartTimeout
-(N/A)
-
-| The time in milliseconds to wait for a consumer thread to start.
-If this time elapses, an error log is written.
-An example of when this might happen is if a configured `taskExecutor` has insufficient threads to support the container `concurrentConsumers`.
-
-See <<threading>>.
-Default: 60000 (one minute).
-
-a| image::images/tickmark.png[]
-a|
-
-| startConsumerMinInterval
-(min-start-interval)
-
-| The time in milliseconds that must elapse before each new consumer is started on demand.
-See <<listener-concurrency>>.
-Default: 10000 (10 seconds).
-
-a| image::images/tickmark.png[]
-a|
-
-| stopConsumerMinInterval
-(min-stop-interval)
-
-| The time in milliseconds that must elapse before a consumer is stopped since the last consumer was stopped when an idle consumer is detected.
-See <<listener-concurrency>>.
-Default: 60000 (one minute).
-
-a| image::images/tickmark.png[]
-a|
-
-| consecutiveActiveTrigger
-(min-consecutive-active)
-
-| The minimum number of consecutive messages received by a consumer, without a receive timeout occurring, when considering starting a new consumer.
-Also impacted by 'txSize'.
-See <<listener-concurrency>>.
-Default: 10.
-
-a| image::images/tickmark.png[]
-a|
-
-| consecutiveIdleTrigger
-(min-consecutive-idle)
-
-| The minimum number of receive timeouts a consumer must experience before considering stopping a consumer.
-Also impacted by 'txSize'.
-See <<listener-concurrency>>.
-Default: 10.
-
-a| image::images/tickmark.png[]
-a|
-
-| connectionFactory
-(connection-factory)
-
-| A reference to the `ConnectionFactory`.
-When configuring byusing the XML namespace, the default referenced bean name is `rabbitConnectionFactory`.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| defaultRequeueRejected
-(requeue-rejected)
-
-| Determines whether messages that are rejected because the listener threw an exception should be requeued or not.
-Default: `true`.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| recoveryInterval
-(recovery-interval)
-
-| Determines the time in milliseconds between attempts to start a consumer if it fails to start for non-fatal reasons.
-Default: 5000.
-Mutually exclusive with `recoveryBackOff`.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| recoveryBackOff
-(recovery-back-off)
-
-| Specifies the `BackOff` for intervals between attempts to start a consumer if it fails to start for non-fatal reasons.
-Default is `FixedBackOff` with unlimited retries every five seconds.
-Mutually exclusive with `recoveryInterval`.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| exclusive
-(exclusive)
-
-| Determines whether the single consumer in this container has exclusive access to the queues.
-The concurrency of the container must be 1 when this is `true`.
-If another consumer has exclusive access, the container tries to recover the consumer, according to the
-`recovery-interval` or `recovery-back-off`.
-When using the namespace, this attribute appears on the `<rabbit:listener/>` element along with the queue names.
-Default: `false`.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| rabbitAdmin
-(admin)
-
-| When a listener container listens to at least one auto-delete queue and it is found to be missing during startup, the container uses a `RabbitAdmin` to declare the queue and any related bindings and exchanges.
-If such elements are configured to use conditional declaration (see <<conditional-declaration>>), the container must use the admin that was configured to declare those elements.
-Specify that admin here.
-It is required only when using auto-delete queues with conditional declaration.
-If you do not wish the auto-delete queues to be declared until the container is started, set `auto-startup` to `false` on the admin.
-Defaults to a `RabbitAdmin` that declares all non-conditional elements.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| missingQueuesFatal
+|missingQueuesFatal
 (missing-queues-fatal)
 
-a| When set to `true` (default), if none of the configured queues are available on the broker, it is considered fatal.
+a|When set to `true` (default), if none of the configured queues are available on the broker, it is considered fatal.
 This causes the application context to fail to initialize during startup.
 Also, when the queues are deleted while the container is running, by default, the consumers make three retries to connect to the queues (at five second intervals) and stop the container if these attempts fail.
 
@@ -5298,14 +5779,41 @@ IMPORTANT: Missing queue detection is disabled while starting a container for a 
 This is to avoid a potential deadlock which can delay the start of such containers for up to 60 seconds.
 Applications using lazy listener beans should check the queue(s) before getting a reference to the lazy bean.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| possibleAuthentication
+|monitorInterval
+(monitor-interval)
+
+|With the DMLC, a task is scheduled to run at this interval to monitor the state of the consumers and recover any that have failed.
+
+a|
+a|image::images/tickmark.png[]
+
+|noLocal
+(N/A)
+
+|Set to `true` to disable delivery from the server to consumers messages published on the same channel's connection.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|phase
+(phase)
+
+|When `autoStartup` is `true`, the lifecycle phase within which this container should start and stop.
+The lower the value, the earlier this container starts and the later it stops.
+The default is `Integer.MAX_VALUE`, meaning the container starts as late as possible and stops as soon as possible.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|possibleAuthentication
 FailureFatal
-(possible-authentication-failure-fatal)
+(possible-authentication-
+failure-fatal)
 
-a| When set to `true` (default), if a `PossibleAuthenticationFailureException` is thrown during connection, it is considered fatal.
+a|When set to `true` (default), if a `PossibleAuthenticationFailureException` is thrown during connection, it is considered fatal.
 This causes the application context to fail to initialize during startup.
 
 Since _version 2.0_.
@@ -5332,181 +5840,153 @@ This global property will not be applied to any containers that have an explicit
 
 The default retry properties (3 retries at 5 second intervals) can be overridden using the properties after this one.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| mismatchedQueuesFatal
-(mismatched-queues-fatal)
+|prefetchCount
+(prefetch)
 
-a| When the container starts, if this property is `true` (default: `false`), the container checks that all queues declared in the context are compatible with queues already on the broker.
-If mismatched properties (such as `auto-delete`) or arguments (skuch as `x-message-ttl`) exist, the container (and application context) fails to start with a fatal exception.
+a|The number of unacknowledged messages that can be outstanding at each consumer.
+The higher this value is, the faster the messages can be delivered, but the higher the risk of non-sequential processing.
+Ignored if the `acknowledgeMode` is `NONE`.
+This is increased, if necessary, to match the `batchSize` or `messagePerAck`.
+Defaults to 250 since 2.0.
+You can set it to 1 to revert to the previous behavior.
 
-If the problem is detected during recovery (for example, after a lost connection), the container is stopped.
+IMPORTANT: There are scenarios where the prefetch value should
+be low -- for example, with large messages, especially if the processing is slow (messages could add up
+to a large amount of memory in the client process), and if strict message ordering is necessary
+(the prefetch value should be set back to 1 in this case).
+Also, with low-volume messaging and multiple consumers (including concurrency within a single listener container instance), you may wish to reduce the prefetch to get a more even distribution of messages across consumers.
 
-There must be a single `RabbitAdmin` in the application context (or one specifically configured on the container by using the `rabbitAdmin` property).
-Otherwise, this property must be `false`.
 
-NOTE: If the broker is not available during initial startup, the container starts and the conditions are checked when the connection is established.
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-IMPORTANT: The check is done against all queues in the context, not just the queues that a particular listener is configured to use.
-If you wish to limit the checks to just those queues used by a container, you should configure a separate `RabbitAdmin` for the container, and provide a reference to it using the `rabbitAdmin` property.
-See <<conditional-declaration>> for more information.
+|rabbitAdmin
+(admin)
 
-IMPORTANT: Mismatched queue argument detection is disabled while starting a container for a `@RabbitListener` in a bean that is marked `@Lazy`.
-This is to avoid a potential deadlock which can delay the start of such containers for up to 60 seconds.
-Applications using lazy listener beans should check the queue arguments before getting a reference to the lazy bean.
+|When a listener container listens to at least one auto-delete queue and it is found to be missing during startup, the container uses a `RabbitAdmin` to declare the queue and any related bindings and exchanges.
+If such elements are configured to use conditional declaration (see <<conditional-declaration>>), the container must use the admin that was configured to declare those elements.
+Specify that admin here.
+It is required only when using auto-delete queues with conditional declaration.
+If you do not wish the auto-delete queues to be declared until the container is started, set `auto-startup` to `false` on the admin.
+Defaults to a `RabbitAdmin` that declares all non-conditional elements.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| autoDeclare
-(auto-declare)
+|receiveTimeout
+(receive-timeout)
 
-a| When set to `true` (default), the container uses a `RabbitAdmin` to redeclare all AMQP objects (queues, exchanges, bindings), if it detects that at least one of its queues is missing during startup, perhaps because it is an `auto-delete` or an expired queue, but the redeclaration proceeds if the queue is missing for any reason.
-To disable this behavior, set this property to `false`.
-Note that the container fails to start if all of its queues are missing.
+|The maximum time to wait for each message.
+If `acknowledgeMode=NONE`, this has very little effect -- the container spins round and asks for another message.
+It has the biggest effect for a transactional `Channel` with `batchSize > 1`, since it can cause messages already consumed not to be acknowledged until the timeout expires.
+When `consumerBatchEnabled` is true, a partial batch will be delivered if this timeout occurs before a batch is complete.
 
-NOTE: Prior to version 1.6, if there was more than one admin in the context, the container would randomly select one.
-If there were no admins, it would create one internally.
-In either case, this could cause unexpected results.
-Starting with version 1.6, for `autoDeclare` to work, there must be exactly one `RabbitAdmin` in the context, or a reference to a specific instance must be configured on the container using the `rabbitAdmin` property.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| declarationRetries
-(declaration-retries)
-
-| The number of retry attempts when passive queue declaration fails.
-Passive queue declaration occurs when the consumer starts or, when consuming from multiple queues, when not all queues were available during initialization.
-When none of the configured queues can be passively declared (for any reason) after the retries are exhausted, the container behavior is controlled by the 'missingQueuesFatal` property, described earlier.
-Default: Three retries (for a total of four attempts).
-
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 a|
 
-| failedDeclarationRetryInterval
-(failed-declaration-retry-
-interval)
+|recoveryBackOff
+(recovery-back-off)
 
-| The interval between passive queue declaration retry attempts.
-Passive queue declaration occurs when the consumer starts or, when consuming from multiple queues, when not all queues were available during initialization.
-Default: 5000 (five seconds).
+|Specifies the `BackOff` for intervals between attempts to start a consumer if it fails to start for non-fatal reasons.
+Default is `FixedBackOff` with unlimited retries every five seconds.
+Mutually exclusive with `recoveryInterval`.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| retryDeclarationInterval
-(missing-queue-retry-interval)
+|recoveryInterval
+(recovery-interval)
 
-| If a subset of the configured queues are available during consumer initialization, the consumer starts consuming from those queues.
+|Determines the time in milliseconds between attempts to start a consumer if it fails to start for non-fatal reasons.
+Default: 5000.
+Mutually exclusive with `recoveryBackOff`.
+
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+
+|retryDeclarationInterval
+(missing-queue-
+retry-interval)
+
+|If a subset of the configured queues are available during consumer initialization, the consumer starts consuming from those queues.
 The consumer tries to passively declare the missing queues by using this interval.
 When this interval elapses, the 'declarationRetries' and 'failedDeclarationRetryInterval' is used again.
 If there are still missing queues, the consumer again waits for this interval before trying again.
 This process continues indefinitely until all queues are available.
 Default: 60000 (one minute).
 
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 a|
 
-| consumerTagStrategy
-(consumer-tag-strategy)
-
-| Set an implementation of <<consumerTags, ConsumerTagStrategy>>, enabling the creation of a (unique) tag for each consumer.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| idleEventInterval
-(idle-event-interval)
-
-| See <<idle-containers>>.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| monitorInterval
-(monitor-interval)
-
-| With the DMLC, a task is scheduled to run at this interval to monitor the state of the consumers and recover any that have failed.
-
-a|
-a| image::images/tickmark.png[]
-
-| taskScheduler
-(task-scheduler)
-
-| With the DMLC, the scheduler used to run the monitor task at the 'monitorInterval'.
-
-a|
-a| image::images/tickmark.png[]
-
-| exclusiveConsumer
-`ExceptionLogger`
+|shutdownTimeout
 (N/A)
 
-| An exception logger used when an exclusive consumer cannot gain access to a queue.
-By default, this is logged at the `WARN` level.
+|When a container shuts down (for example,
+if its enclosing `ApplicationContext` is closed), it waits for in-flight messages to be processed up to this limit.
+Defaults to five seconds.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| statefulRetryFatalWithNullMessageId
+|startConsumerMinInterval
+(min-start-interval)
+
+|The time in milliseconds that must elapse before each new consumer is started on demand.
+See <<listener-concurrency>>.
+Default: 10000 (10 seconds).
+
+a|image::images/tickmark.png[]
+a|
+
+|statefulRetryFatal
+WithNullMessageId
 (N/A)
 
-| When using a stateful retry advice, if a message with a missing `messageId` property is received, it is considered
+|When using a stateful retry advice, if a message with a missing `messageId` property is received, it is considered
 fatal for the consumer (it is stopped) by default.
 Set this to `false` to discard (or route to a dead-letter queue) such messages.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| alwaysRequeueWithTxManagerRollback
-(N/A)
+|stopConsumerMinInterval
+(min-stop-interval)
 
-| Set to `true` to always requeue messages on rollback when a transaction manager is configured.
+|The time in milliseconds that must elapse before a consumer is stopped since the last consumer was stopped when an idle consumer is detected.
+See <<listener-concurrency>>.
+Default: 60000 (one minute).
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|
 
-| noLocal
-(N/A)
+|taskExecutor
+(task-executor)
 
-| Set to `true` to disable delivery from the server to consumers messages published on the same channel's connection.
+|A reference to a Spring `TaskExecutor` (or standard JDK 1.5+ `Executor`) for executing listener invokers.
+Default is a `SimpleAsyncTaskExecutor`, using internally managed threads.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
-| afterReceivePostProcessors
-(N/A)
+|taskScheduler
+(task-scheduler)
 
-| An array of `MessagePostProcessor` instances that are invoked before invoking the listener.
-Post processors can implement `PriorityOrdered` or `Ordered`.
-The array is sorted with un-ordered members invoked last.
-If a post processor returns `null`, the message is discarded (and acknowledged, if appropriate).
+|With the DMLC, the scheduler used to run the monitor task at the 'monitorInterval'.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|
+a|image::images/tickmark.png[]
 
-| debatchingEnabled
-(N/A)
+|transactionManager
+(transaction-manager)
 
-| When true, the listener container will debatch batched messages and invoke the listener with each message from the batch.
-Default true.
-See <<template-batching>> and <<receiving-batch>>.
+|External transaction manager for the operation of the listener.
+Also complementary to `channelTransacted` -- if the `Channel` is transacted, its transaction is synchronized with the external transaction.
 
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
-
-| batchingStrategy
-(N/A)
-
-| The strategy used when debatchng messages.
-Default `SimpleDebatchingStrategy`.
-See <<template-batching>> and <<receiving-batch>>.
-
-a| image::images/tickmark.png[]
-a| image::images/tickmark.png[]
+a|image::images/tickmark.png[]
+a|image::images/tickmark.png[]
 
 |===
 
@@ -5530,14 +6010,14 @@ This works in conjunction with four additional properties: `consecutiveActiveTri
 With the default settings, the algorithm to increase consumers works as follows:
 
 If the `maxConcurrentConsumers` has not been reached and an existing consumer is active for ten consecutive cycles AND at least 10 seconds has elapsed since the last consumer was started, a new consumer is started.
-A consumer is considered active if it received at least one message in `txSize` * `receiveTimeout` milliseconds.
+A consumer is considered active if it received at least one message in `batchSize` * `receiveTimeout` milliseconds.
 
 With the default settings, the algorithm to decrease consumers works as follows:
 
 If there are more than `concurrentConsumers` running and a consumer detects ten consecutive timeouts (idle) AND the last consumer was stopped at least 60 seconds ago, a consumer is stopped.
-The timeout depends on the `receiveTimeout` and the `txSize` properties.
-A consumer is considered idle if it receives no messages in `txSize` * `receiveTimeout` milliseconds.
-So, with the default timeout (one second) and a `txSize` of four, stopping a consumer is considered after 40 seconds of idle time (four timeouts correspond to one idle detection).
+The timeout depends on the `receiveTimeout` and the `batchSize` properties.
+A consumer is considered idle if it receives no messages in `batchSize` * `receiveTimeout` milliseconds.
+So, with the default timeout (one second) and a `batchSize` of four, stopping a consumer is considered after 40 seconds of idle time (four timeouts correspond to one idle detection).
 
 NOTE: Practically, consumers can be stopped only if the whole container is idle for some time.
 This is because the broker shares its work across all the active consumers.
@@ -5610,6 +6090,26 @@ Anonymous queues are non-durable, exclusive, and auto-deleting.
 IMPORTANT: Automatic declaration is performed only when the `CachingConnectionFactory` cache mode is `CHANNEL` (the default).
 This limitation exists because exclusive and auto-delete queues are bound to the connection.
 
+Starting with version 2.2.2, the `RabbitAdmin` will detect beans of type `DeclarationCustomizer` and apply the function before actually processing the declaration.
+This is useful, for example, to set a new argument (property) before it has first class support within the framework.
+
+====
+[source, java]
+----
+@Bean
+public DeclarableCustomizer customizer() {
+    return dec -> {
+        if (dec instanceof Queue && ((Queue) dec).getName().equals("my.queue")) {
+            dec.addArgument("some.new.queue.argument", true);
+        }
+        return dec;
+    };
+}
+----
+====
+
+It is also useful in projects that don't provide direct access to the `Declarable` bean definitions.
+
 See also <<auto-recovery>>.
 
 [[retry]]
@@ -5649,10 +6149,10 @@ The following example shows how to do so:
 ----
 @Bean
 public StatefulRetryOperationsInterceptor interceptor() {
-	return RetryInterceptorBuilder.stateful()
-			.maxAttempts(5)
-			.backOffOptions(1000, 2.0, 10000) // initialInterval, multiplier, maxInterval
-			.build();
+    return RetryInterceptorBuilder.stateful()
+            .maxAttempts(5)
+            .backOffOptions(1000, 2.0, 10000) // initialInterval, multiplier, maxInterval
+            .build();
 }
 ----
 ====
@@ -5660,6 +6160,17 @@ public StatefulRetryOperationsInterceptor interceptor() {
 Only a subset of retry capabilities can be configured this way.
 More advanced features would need the configuration of a `RetryTemplate` as a Spring bean.
 See the https://docs.spring.io/spring-retry/docs/api/current/[Spring Retry Javadoc] for complete information about available policies and their configuration.
+
+[[batch-retry]]
+===== Retry with Batch Listeners
+
+It is not recommended to configure retry with a batch listener, unless the batch was created by the producer, in a single record.
+See <<de-batching>> for information about consumer and producer-created batches.
+With a consumer-created batch, the framework has no knowledge about which message in the batch caused the failure so recovery after the retries are exhausted is not possible.
+With producer-created batches, since there is only one message that actually failed, the whole message can be recovered.
+Applications may want to inform a custom recoverer where in the batch the failure occurred, perhaps by setting an index property of the thrown exception.
+
+A retry recoverer for a batch listener must implement `MessageBatchRecoverer`.
 
 [[async-listeners]]
 ===== Message Listeners and the Asynchronous Case
@@ -5709,10 +6220,10 @@ The following example shows how to set a `RepublishMessageRecoverer` as the reco
 ----
 @Bean
 RetryOperationsInterceptor interceptor() {
-	return RetryInterceptorBuilder.stateless()
-			.maxAttempts(5)
-			.recoverer(new RepublishMessageRecoverer(amqpTemplate(), "something", "somethingelse"))
-			.build();
+    return RetryInterceptorBuilder.stateless()
+            .maxAttempts(5)
+            .recoverer(new RepublishMessageRecoverer(amqpTemplate(), "something", "somethingelse"))
+            .build();
 }
 ----
 ====
@@ -5736,6 +6247,16 @@ RepublishMessageRecoverer recoverer = new RepublishMessageRecoverer(amqpTemplate
 ----
 ====
 
+Starting with version 2.0.5, the stack trace may be truncated if it is too large; this is because all headers have to fit in a single frame.
+By default, if the stack trace would cause less than 20,000 bytes ('headroom') to be available for other headers, it will be truncated.
+This can be adjusted by setting the recoverer's `frameMaxHeadroom` property, if you need more or less space for other headers.
+Starting with versions 2.1.13, 2.2.3, the exception message is included in this calculation, and the amount of stack trace will be maximized using the following algorithm:
+
+* if the stack trace alone would exceed the limit, the exception message header will be truncated to 97 bytes plus `...` and the stack trace is truncated too.
+* if the stack trace is small, the message will be truncated (plus `...`) to fit in the available bytes (but the message within the stack trace itself is truncated to 97 bytes plus `...`).
+
+Whenever a truncation of any kind occurs, the original exception will be logged to retain the complete information.
+
 Starting with version 2.1, an `ImmediateRequeueMessageRecoverer` is  added to throw an `ImmediateRequeueAmqpException`, which notifies a listener container to requeue the current failed message.
 
 ===== Exception Classification for Spring Retry
@@ -5749,6 +6270,159 @@ Since Spring Retry 1.0.3, the `BinaryExceptionClassifier` has a property called 
 When `true`, it travers exception causes until it finds a match or there is no cause.
 
 To use this classifier for retry, you can use a `SimpleRetryPolicy` created with the constructor that takes the max attempts, the `Map` of `Exception` instances, and the boolean (`traverseCauses`) and inject this policy into the `RetryTemplate`.
+
+[[multi-rabbit]]
+==== Multiple Broker (or Cluster) Support
+
+Version 2.3 added more convenience when communicating between a single application and multiple brokers or broker clusters.
+The main benefit, on the consumer side, is that the infrastructure can automatically associate auto-declared queues with the appropriate broker.
+
+This is best illustrated with an example:
+
+====
+[source, java]
+----
+@SpringBootApplication(exclude = RabbitAutoConfiguration.class)
+public class Application {
+
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
+    }
+
+    @Bean
+    CachingConnectionFactory cf1() {
+        return new CachingConnectionFactory("localhost");
+    }
+
+    @Bean
+    CachingConnectionFactory cf2() {
+        return new CachingConnectionFactory("otherHost");
+    }
+
+    @Bean
+    CachingConnectionFactory cf3() {
+        return new CachingConnectionFactory("thirdHost");
+    }
+
+    @Bean
+    SimpleRoutingConnectionFactory rcf(CachingConnectionFactory cf1,
+            CachingConnectionFactory cf2, CachingConnectionFactory cf3) {
+
+        SimpleRoutingConnectionFactory rcf = new SimpleRoutingConnectionFactory();
+        rcf.setDefaultTargetConnectionFactory(cf1);
+        rcf.setTargetConnectionFactories(Map.of("one", cf1, "two", cf2, "three", cf3));
+        return rcf;
+    }
+
+    @Bean("factory1-admin")
+    RabbitAdmin admin1(CachingConnectionFactory cf1) {
+        return new RabbitAdmin(cf1);
+    }
+
+    @Bean("factory2-admin")
+    RabbitAdmin admin2(CachingConnectionFactory cf2) {
+        return new RabbitAdmin(cf2);
+    }
+
+    @Bean("factory3-admin")
+    RabbitAdmin admin3(CachingConnectionFactory cf3) {
+        return new RabbitAdmin(cf3);
+    }
+
+    @Bean
+    public RabbitListenerEndpointRegistry rabbitListenerEndpointRegistry() {
+        return new RabbitListenerEndpointRegistry();
+    }
+
+    @Bean
+    public RabbitListenerAnnotationBeanPostProcessor postProcessor(RabbitListenerEndpointRegistry registry) {
+        MultiRabbitListenerAnnotationBeanPostProcessor postProcessor
+                = new MultiRabbitListenerAnnotationBeanPostProcessor();
+        postProcessor.setEndpointRegistry(registry);
+        postProcessor.setContainerFactoryBeanName("defaultContainerFactory");
+        return postProcessor;
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory factory1(CachingConnectionFactory cf1) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(cf1);
+        return factory;
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory factory2(CachingConnectionFactory cf2) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(cf2);
+        return factory;
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory factory3(CachingConnectionFactory cf3) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(cf3);
+        return factory;
+    }
+
+    @Bean
+    RabbitTemplate template(RoutingConnectionFactory rcf) {
+        return new RabbitTemplate(rcf);
+    }
+
+    @Bean
+    ConnectionFactoryContextWrapper wrapper(SimpleRoutingConnectionFactory rcf) {
+        return new ConnectionFactoryContextWrapper(rcf);
+    }
+
+}
+
+@Component
+class Listeners {
+
+    @RabbitListener(queuesToDeclare = @Queue("q1"), containerFactory = "factory1")
+    public void listen1(String in) {
+
+    }
+
+    @RabbitListener(queuesToDeclare = @Queue("q2"), containerFactory = "factory2")
+    public void listen2(String in) {
+
+    }
+
+    @RabbitListener(queuesToDeclare = @Queue("q3"), containerFactory = "factory3")
+    public void listen3(String in) {
+
+    }
+
+}
+----
+====
+
+As you can see, we have declared 3 sets of infrastructure (connection factories, admins, container factories).
+As discussed earlier, `@RabbitListener` can define which container factory to use; in this case, they also use `queuesToDeclare` which causes the queue(s) to be declared on the broker, if it doesn't exist.
+By naming the `RabbitAdmin` beans with the convention `<container-factory-name>-admin`, the infrastructure is able to determine which admin should declare the queue.
+This will also work with `bindings = @QueueBinding(...)` whereby the exchange and binding will also be declared.
+It will NOT work with `queues`, since that expects the queue(s) to already exist.
+
+On the producer side, a convenient `ConnectionFactoryContextWrapper` class is provided, to make using the `RoutingConnectionFactory` (see <<routing-connection-factory>>) simpler.
+
+As you can see above, a `SimpleRoutingConnectionFactory` bean has been added with routing keys `one`, `two` and `three`.
+There is also a `RabbitTemplate` that uses that factory.
+Here is an example of using that template with the wrapper to route to one of the broker clusters.
+
+====
+[source, java]
+----
+@Bean
+public ApplicationRunner runner(RabbitTemplate template, ConnectionFactoryContextWrapper wrapper) {
+    return args -> {
+        wrapper.run("one", () -> template.convertAndSend("q1", "toCluster1"));
+        wrapper.run("two", () -> template.convertAndSend("q2", "toCluster2"));
+        wrapper.run("three", () -> template.convertAndSend("q3", "toCluster3"));
+    };
+}
+----
+====
 
 ==== Debugging
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2019 the original author or authors.
+ * Copyright 2018-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.springframework.amqp.support.converter;
 
 import java.io.IOException;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -83,7 +84,11 @@ public abstract class AbstractJackson2MessageConverter extends AbstractMessageCo
 
 	private ProjectingMessageConverter projectingConverter;
 
-	private boolean standardCharset;
+	private boolean charsetIsUtf8 = true;
+
+	private boolean assumeSupportedContentType = true;
+
+	private boolean alwaysConvertToInferredType;
 
 	/**
 	 * Construct with the provided {@link ObjectMapper} instance.
@@ -120,9 +125,7 @@ public abstract class AbstractJackson2MessageConverter extends AbstractMessageCo
 	public void setDefaultCharset(@Nullable String defaultCharset) {
 		this.defaultCharset = (defaultCharset != null) ? Charset.forName(defaultCharset)
 				: DEFAULT_CHARSET;
-		if (this.defaultCharset.equals(StandardCharsets.UTF_8)) {
-			this.standardCharset = true;
-		}
+		this.charsetIsUtf8 = this.defaultCharset.equals(StandardCharsets.UTF_8);
 	}
 
 	public String getDefaultCharset() {
@@ -198,6 +201,18 @@ public abstract class AbstractJackson2MessageConverter extends AbstractMessageCo
 		}
 	}
 
+	/**
+	 * When false (default), fall back to type id headers if the type (or contents of a container
+	 * type) is abstract. Set to true if conversion should always be attempted - perhaps because
+	 * a custom deserializer has been configured on the {@link ObjectMapper}. If the attempt fails,
+	 * fall back to headers.
+	 * @param alwaysAttemptConversion true to attempt.
+	 * @since 2.2.8
+	 */
+	public void setAlwaysConvertToInferredType(boolean alwaysAttemptConversion) {
+		this.alwaysConvertToInferredType = alwaysAttemptConversion;
+	}
+
 	protected boolean isUseProjectionForInterfaces() {
 		return this.useProjectionForInterfaces;
 	}
@@ -218,6 +233,19 @@ public abstract class AbstractJackson2MessageConverter extends AbstractMessageCo
 		}
 	}
 
+	/**
+	 * By default the supported content type is assumed when there is no contentType
+	 * property or it is set to the default ('application/octet-stream'). Set to 'false'
+	 * to revert to the previous behavior of returning an unconverted 'byte[]' when this
+	 * condition exists.
+	 * @param assumeSupportedContentType set false to not assume the content type is
+	 * supported.
+	 * @since 2.2
+	 */
+	public void setAssumeSupportedContentType(boolean assumeSupportedContentType) {
+		this.assumeSupportedContentType = assumeSupportedContentType;
+	}
+
 	@Override
 	public Object fromMessage(Message message) throws MessageConversionException {
 		return fromMessage(message, null);
@@ -233,7 +261,9 @@ public abstract class AbstractJackson2MessageConverter extends AbstractMessageCo
 		MessageProperties properties = message.getMessageProperties();
 		if (properties != null) {
 			String contentType = properties.getContentType();
-			if (contentType != null && contentType.contains(this.supportedContentType.getSubtype())) {
+			if ((this.assumeSupportedContentType // NOSONAR Boolean complexity
+					&& (contentType == null || contentType.equals(MessageProperties.DEFAULT_CONTENT_TYPE)))
+					|| (contentType != null && contentType.contains(this.supportedContentType.getSubtype()))) {
 				String encoding = properties.getContentEncoding();
 				if (encoding == null) {
 					encoding = getDefaultCharset();
@@ -256,14 +286,31 @@ public abstract class AbstractJackson2MessageConverter extends AbstractMessageCo
 	private Object doFromMessage(Message message, Object conversionHint, MessageProperties properties,
 			String encoding) {
 
-		Object content;
+		Object content = null;
 		try {
-			JavaType inferredType = this.javaTypeMapper.getInferredType(properties);
-			if (inferredType != null && this.useProjectionForInterfaces && inferredType.isInterface()
-					&& !inferredType.getRawClass().getPackage().getName().startsWith("java.util")) { // List etc
-				content = this.projectingConverter.convert(message, inferredType.getRawClass());
-			}
-			else if (conversionHint instanceof ParameterizedTypeReference) {
+			content = convertContent(message, conversionHint, properties, encoding);
+		}
+		catch (IOException e) {
+			throw new MessageConversionException(
+					"Failed to convert Message content", e);
+		}
+		return content;
+	}
+
+	private Object convertContent(Message message, Object conversionHint, MessageProperties properties, String encoding)
+			throws IOException {
+
+		Object content = null;
+		JavaType inferredType = this.javaTypeMapper.getInferredType(properties);
+		if (inferredType != null && this.useProjectionForInterfaces && inferredType.isInterface()
+				&& !inferredType.getRawClass().getPackage().getName().startsWith("java.util")) { // List etc
+			content = this.projectingConverter.convert(message, inferredType.getRawClass());
+		}
+		else if (inferredType != null && this.alwaysConvertToInferredType) {
+			content = tryConverType(message, encoding, inferredType);
+		}
+		if (content == null) {
+			if (conversionHint instanceof ParameterizedTypeReference) {
 				content = convertBytesToObject(message.getBody(), encoding,
 						this.objectMapper.getTypeFactory().constructType(
 								((ParameterizedTypeReference<?>) conversionHint).getType()));
@@ -281,11 +328,22 @@ public abstract class AbstractJackson2MessageConverter extends AbstractMessageCo
 						encoding, targetClass);
 			}
 		}
-		catch (IOException e) {
-			throw new MessageConversionException(
-					"Failed to convert Message content", e);
-		}
 		return content;
+	}
+
+	/*
+	 * Unfortunately, mapper.canDeserialize() always returns true (adds an AbstractDeserializer
+	 * to the cache); so all we can do is try a conversion.
+	 */
+	@Nullable
+	private Object tryConverType(Message message, String encoding, JavaType inferredType) {
+		try {
+			return convertBytesToObject(message.getBody(), encoding, inferredType);
+		}
+		catch (Exception e) {
+			this.log.trace("Cannot create possibly abstract container contents; falling back to headers", e);
+			return null;
+		}
 	}
 
 	private Object convertBytesToObject(byte[] body, String encoding, JavaType targetJavaType) throws IOException {
@@ -307,12 +365,11 @@ public abstract class AbstractJackson2MessageConverter extends AbstractMessageCo
 
 	@Override
 	protected Message createMessage(Object objectToConvert, MessageProperties messageProperties,
-				@Nullable Type genericType)
-			throws MessageConversionException {
+			@Nullable Type genericType) throws MessageConversionException {
 
 		byte[] bytes;
 		try {
-			if (this.standardCharset) {
+			if (this.charsetIsUtf8) {
 				bytes = this.objectMapper.writeValueAsBytes(objectToConvert);
 			}
 			else {
@@ -329,8 +386,13 @@ public abstract class AbstractJackson2MessageConverter extends AbstractMessageCo
 		messageProperties.setContentLength(bytes.length);
 
 		if (getClassMapper() == null) {
-			getJavaTypeMapper().fromJavaType(this.objectMapper.constructType(
-					genericType == null ? objectToConvert.getClass() : genericType), messageProperties);
+			JavaType type = this.objectMapper.constructType(
+					genericType == null ? objectToConvert.getClass() : genericType);
+			if (genericType != null && !type.isContainerType()
+					&& Modifier.isAbstract(type.getRawClass().getModifiers())) {
+				type = this.objectMapper.constructType(objectToConvert.getClass());
+			}
+			getJavaTypeMapper().fromJavaType(type, messageProperties);
 		}
 		else {
 			getClassMapper().fromClass(objectToConvert.getClass(), messageProperties); // NOSONAR never null

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,38 +16,95 @@
 
 package org.springframework.amqp.rabbit.test.mockito;
 
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
+
+import org.mockito.internal.stubbing.defaultanswers.ForwardsInvocations;
 import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
+
+import org.springframework.lang.Nullable;
 
 /**
- * An Answer to optionally call the real method and allow returning a
- * custom result.
+ * An {@link org.mockito.stubbing.Answer} to optionally call the real method and allow
+ * returning a custom result. Captures any exceptions thrown.
+ *
+ * @param <T> the return type.
  *
  * @author Gary Russell
  * @since 1.6
  *
  */
-public class LambdaAnswer<T> implements Answer<T> {
+@SuppressWarnings("serial")
+public class LambdaAnswer<T> extends ForwardsInvocations {
 
 	private final boolean callRealMethod;
 
 	private final ValueToReturn<T> callback;
 
+	private final Set<Exception> exceptions = Collections.synchronizedSet(new LinkedHashSet<>());
+
+	private final boolean hasDelegate;
+
+	/**
+	 * Deprecated.
+	 * @param callRealMethod true to call the real method.
+	 * @param callback the callback.
+	 * @deprecated in favor of {@link #LambdaAnswer(boolean, ValueToReturn, Object)}.
+	 */
+	@Deprecated
 	public LambdaAnswer(boolean callRealMethod, ValueToReturn<T> callback) {
+		this(callRealMethod, callback, null);
+	}
+
+	/**
+	 * Construct an instance with the provided properties. Use the test harness to get an
+	 * instance with the proper delegate.
+	 * @param callRealMethod true to call the real method.
+	 * @param callback the call back to receive the result.
+	 * @param delegate the delegate.
+	 */
+	public LambdaAnswer(boolean callRealMethod, ValueToReturn<T> callback, @Nullable Object delegate) {
+		super(delegate);
 		this.callRealMethod = callRealMethod;
 		this.callback = callback;
+		this.hasDelegate = delegate != null;
 	}
 
 	@SuppressWarnings("unchecked")
 	@Override
 	public T answer(InvocationOnMock invocation) throws Throwable {
 		T result = null;
-		if (this.callRealMethod) {
-			result = (T) invocation.callRealMethod();
+		try {
+			if (this.callRealMethod) {
+				if (this.hasDelegate) {
+					result = (T) super.answer(invocation);
+				}
+				else {
+					result = (T) invocation.callRealMethod();
+				}
+			}
+			return this.callback.apply(invocation, result);
 		}
-		return this.callback.apply(invocation, result);
+		catch (Exception e) {
+			this.exceptions.add(e);
+			throw e;
+		}
 	}
 
+	/**
+	 * Return the exceptions thrown, if any.
+	 * @return the exceptions.
+	 * @since 2.2.3
+	 */
+	public Collection<Exception> getExceptions() {
+		synchronized (this.exceptions) {
+			return new LinkedHashSet<>(this.exceptions);
+		}
+	}
+
+	@FunctionalInterface
 	public interface ValueToReturn<T> {
 
 		T apply(InvocationOnMock invocation, T result);

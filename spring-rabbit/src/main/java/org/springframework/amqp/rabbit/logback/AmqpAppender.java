@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 the original author or authors.
+ * Copyright 2014-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.springframework.amqp.AmqpApplicationContextClosedException;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Exchange;
@@ -45,10 +46,15 @@ import org.springframework.amqp.rabbit.connection.AbstractConnectionFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactoryConfigurationUtils;
 import org.springframework.amqp.rabbit.connection.RabbitConnectionFactoryBean;
+import org.springframework.amqp.rabbit.connection.RabbitUtils;
 import org.springframework.amqp.rabbit.core.DeclareExchangeConnectionListener;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.support.RabbitExceptionTranslator;
 import org.springframework.amqp.utils.JavaUtils;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.util.StringUtils;
@@ -90,6 +96,8 @@ import com.rabbitmq.client.ConnectionFactory;
  * @author Stephen Oakey
  * @author Dominique Villard
  * @author Nicolas Ristock
+ * @author Eugene Gusev
+ * @author Wayne Chu
  *
  * @since 1.4
  */
@@ -116,6 +124,8 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 	 * Key name for the thread name in the message properties.
 	 */
 	public static final String THREAD_NAME = "thread";
+
+	private final ApplicationContext context = new GenericApplicationContext();
 
 	/**
 	 * Name of the exchange to publish log events to.
@@ -272,6 +282,12 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 	 */
 	private String trustStoreType = "JKS";
 
+	/**
+	 * SaslConfig.
+	 * @see RabbitUtils#stringToSaslConfig(String, ConnectionFactory)
+	 */
+	private String saslConfig;
+
 	private boolean verifyHostname = true;
 
 	/**
@@ -295,6 +311,11 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 	 * the system charset.
 	 */
 	private String charset;
+
+	/**
+	 * Whether or not add MDC properties into message headers. true by default for backward compatibility
+	 */
+	private boolean addMdcAsHeaders = true;
 
 	private boolean durable = true;
 
@@ -466,6 +487,20 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 		this.trustStoreType = trustStoreType;
 	}
 
+	public String getSaslConfig() {
+		return this.saslConfig;
+	}
+
+	/**
+	 * Set the {@link com.rabbitmq.client.SaslConfig}.
+	 * @param saslConfig the saslConfig to set
+	 * @since 1.7.14
+	 * @see RabbitUtils#stringToSaslConfig(String, ConnectionFactory)
+	 */
+	public void setSaslConfig(String saslConfig) {
+		this.saslConfig = saslConfig;
+	}
+
 	public String getExchangeName() {
 		return this.exchangeName;
 	}
@@ -532,6 +567,14 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 
 	public void setMaxSenderRetries(int maxSenderRetries) {
 		this.maxSenderRetries = maxSenderRetries;
+	}
+
+	public boolean isAddMdcAsHeaders() {
+		return this.addMdcAsHeaders;
+	}
+
+	public void setAddMdcAsHeaders(boolean addMdcAsHeaders) {
+		this.addMdcAsHeaders = addMdcAsHeaders;
 	}
 
 	public boolean isDurable() {
@@ -646,6 +689,7 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 			this.locationLayout.setContext(getContext());
 			this.locationLayout.start();
 			this.connectionFactory = new CachingConnectionFactory(rabbitConnectionFactory);
+			this.connectionFactory.setApplicationContext(this.context);
 			if (StringUtils.hasText(this.connectionName)) {
 				this.connectionFactory.setConnectionNameStrategy(cf -> this.connectionName);
 			}
@@ -713,6 +757,16 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 				factoryBean.setTrustStore(this.trustStore);
 				factoryBean.setTrustStorePassphrase(this.trustStorePassphrase);
 				factoryBean.setTrustStoreType(this.trustStoreType);
+				JavaUtils.INSTANCE
+						.acceptIfNotNull(this.saslConfig, config -> {
+							try {
+								factoryBean.setSaslConfig(RabbitUtils.stringToSaslConfig(config,
+										factoryBean.getRabbitConnectionFactory()));
+							}
+							catch (Exception e) {
+								throw RabbitExceptionTranslator.convertRabbitAccessException(e);
+							}
+						});
 			}
 		}
 		if (this.layout == null && this.encoder == null) {
@@ -751,6 +805,7 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 		}
 		if (null != this.connectionFactory) {
 			this.connectionFactory.destroy();
+			this.connectionFactory.onApplicationEvent(new ContextClosedEvent(this.context));
 		}
 		this.retryTimer.cancel();
 		this.routingKeyLayout.stop();
@@ -788,6 +843,54 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 		}
 	}
 
+	protected MessageProperties prepareMessageProperties(Event event) {
+		ILoggingEvent logEvent = event.getEvent();
+
+		String name = logEvent.getLoggerName();
+		Level level = logEvent.getLevel();
+
+		MessageProperties amqpProps = new MessageProperties();
+		amqpProps.setDeliveryMode(this.deliveryMode);
+		amqpProps.setContentType(this.contentType);
+		if (null != this.contentEncoding) {
+			amqpProps.setContentEncoding(this.contentEncoding);
+		}
+		amqpProps.setHeader(CATEGORY_NAME, name);
+		amqpProps.setHeader(THREAD_NAME, logEvent.getThreadName());
+		amqpProps.setHeader(CATEGORY_LEVEL, level.toString());
+		if (this.generateId) {
+			amqpProps.setMessageId(UUID.randomUUID().toString());
+		}
+
+		// Set timestamp
+		Calendar tstamp = Calendar.getInstance();
+		tstamp.setTimeInMillis(logEvent.getTimeStamp());
+		amqpProps.setTimestamp(tstamp.getTime());
+
+		// Copy properties in from MDC
+		if (this.addMdcAsHeaders) {
+			Map<String, String> props = event.getProperties();
+			Set<Entry<String, String>> entrySet = props.entrySet();
+			for (Entry<String, String> entry : entrySet) {
+				amqpProps.setHeader(entry.getKey(), entry.getValue());
+			}
+		}
+
+		String[] location = this.locationLayout.doLayout(logEvent).split("\\|");
+		if (!"?".equals(location[0])) {
+			amqpProps.setHeader(
+					"location",
+					String.format("%s.%s()[%s]", location[0], location[1], location[2]));
+		}
+
+		// Set applicationId, if we're using one
+		if (this.applicationId != null) {
+			amqpProps.setAppId(this.applicationId);
+		}
+
+		return amqpProps;
+	}
+
 	/**
 	 * Subclasses may modify the final message before sending.
 	 * @param message The message.
@@ -810,54 +913,21 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 				RabbitTemplate rabbitTemplate = new RabbitTemplate(AmqpAppender.this.connectionFactory);
 				while (true) {
 					final Event event = AmqpAppender.this.events.take();
-					ILoggingEvent logEvent = event.getEvent();
 
-					String name = logEvent.getLoggerName();
-					Level level = logEvent.getLevel();
+					MessageProperties amqpProps = prepareMessageProperties(event);
 
-					MessageProperties amqpProps = new MessageProperties();
-					amqpProps.setDeliveryMode(AmqpAppender.this.deliveryMode);
-					amqpProps.setContentType(AmqpAppender.this.contentType);
-					if (null != AmqpAppender.this.contentEncoding) {
-						amqpProps.setContentEncoding(AmqpAppender.this.contentEncoding);
-					}
-					amqpProps.setHeader(CATEGORY_NAME, name);
-					amqpProps.setHeader(THREAD_NAME, logEvent.getThreadName());
-					amqpProps.setHeader(CATEGORY_LEVEL, level.toString());
-					if (AmqpAppender.this.generateId) {
-						amqpProps.setMessageId(UUID.randomUUID().toString());
-					}
-
-					// Set timestamp
-					Calendar tstamp = Calendar.getInstance();
-					tstamp.setTimeInMillis(logEvent.getTimeStamp());
-					amqpProps.setTimestamp(tstamp.getTime());
-
-					// Copy properties in from MDC
-					Map<String, String> props = event.getProperties();
-					Set<Entry<String, String>> entrySet = props.entrySet();
-					for (Entry<String, String> entry : entrySet) {
-						amqpProps.setHeader(entry.getKey(), entry.getValue());
-					}
-					String[] location = AmqpAppender.this.locationLayout.doLayout(logEvent).split("\\|");
-					if (!"?".equals(location[0])) {
-						amqpProps.setHeader(
-								"location",
-								String.format("%s.%s()[%s]", location[0], location[1], location[2]));
-					}
-					String routingKey = AmqpAppender.this.routingKeyLayout.doLayout(logEvent);
-					// Set applicationId, if we're using one
-					if (AmqpAppender.this.applicationId != null) {
-						amqpProps.setAppId(AmqpAppender.this.applicationId);
-					}
+					String routingKey = AmqpAppender.this.routingKeyLayout.doLayout(event.getEvent());
 
 					sendOneEncoderPatternMessage(rabbitTemplate, routingKey);
 
-					doSend(rabbitTemplate, event, logEvent, name, amqpProps, routingKey);
+					doSend(rabbitTemplate, event, event.getEvent(), name, amqpProps, routingKey);
 				}
 			}
 			catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
+			}
+			catch (Exception e) {
+				addError("Could not send log message, appender is stopped", e);
 			}
 		}
 
@@ -897,6 +967,9 @@ public class AmqpAppender extends AppenderBase<ILoggingEvent> {
 
 				message = postProcessMessageBeforeSend(message, event);
 				rabbitTemplate.send(AmqpAppender.this.exchangeName, routingKey, message);
+			}
+			catch (AmqpApplicationContextClosedException e) {
+				addError("Could not send log message " + logEvent.getMessage() + " appender is stopped");
 			}
 			catch (AmqpException e) {
 				int retries = event.incrementRetries();

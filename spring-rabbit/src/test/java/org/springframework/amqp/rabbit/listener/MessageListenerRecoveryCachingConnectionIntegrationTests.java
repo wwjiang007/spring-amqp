@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,10 @@
 package org.springframework.amqp.rabbit.listener;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.awaitility.Awaitility.with;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Properties;
@@ -28,10 +31,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.logging.log4j.Level;
-import org.junit.After;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.AmqpIllegalStateException;
 import org.springframework.amqp.core.AcknowledgeMode;
@@ -43,12 +44,13 @@ import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionProxy;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.junit.BrokerRunning;
 import org.springframework.amqp.rabbit.junit.BrokerTestUtils;
-import org.springframework.amqp.rabbit.junit.LongRunningIntegrationTest;
+import org.springframework.amqp.rabbit.junit.LogLevels;
+import org.springframework.amqp.rabbit.junit.LongRunning;
+import org.springframework.amqp.rabbit.junit.RabbitAvailable;
+import org.springframework.amqp.rabbit.listener.MessageListenerRecoveryCachingConnectionIntegrationTests.ManualAckListener;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
 import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
-import org.springframework.amqp.rabbit.test.LogLevelAdjuster;
 import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.context.ApplicationContext;
@@ -65,13 +67,22 @@ import com.rabbitmq.client.Channel;
  * @since 1.0
  *
  */
+@RabbitAvailable(queues = { MessageListenerRecoveryCachingConnectionIntegrationTests.TEST_QUEUE,
+		MessageListenerRecoveryCachingConnectionIntegrationTests.TEST_SEND })
+@LongRunning
+@LogLevels(level = "DEBUG", classes = { RabbitTemplate.class, ManualAckListener.class,
+			SimpleMessageListenerContainer.class, BlockingQueueConsumer.class, CachingConnectionFactory.class })
 public class MessageListenerRecoveryCachingConnectionIntegrationTests {
+
+	public static final String TEST_QUEUE = "test.queue.MessageListenerRecoveryCachingConnectionIntegrationTests";
+
+	public static final String TEST_SEND = "test.send.MessageListenerRecoveryCachingConnectionIntegrationTests";
 
 	private static Log logger = LogFactory.getLog(MessageListenerRecoveryCachingConnectionIntegrationTests.class);
 
-	private final Queue queue = new Queue("test.queue");
+	private final Queue queue = new Queue(TEST_QUEUE);
 
-	private final Queue sendQueue = new Queue("test.send");
+	private final Queue sendQueue = new Queue(TEST_SEND);
 
 	private int concurrentConsumers = 1;
 
@@ -83,16 +94,6 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 	private SimpleMessageListenerContainer container;
 
-	@Rule
-	public LongRunningIntegrationTest longTests = new LongRunningIntegrationTest();
-
-	@Rule
-	public LogLevelAdjuster logLevels = new LogLevelAdjuster(Level.DEBUG, RabbitTemplate.class, ManualAckListener.class,
-			SimpleMessageListenerContainer.class, BlockingQueueConsumer.class, CachingConnectionFactory.class);
-
-	@Rule
-	public BrokerRunning brokerIsRunning = BrokerRunning.isRunningWithEmptyQueues(queue.getName(), sendQueue.getName());
-
 	protected CachingConnectionFactory createConnectionFactory() {
 		CachingConnectionFactory connectionFactory = new CachingConnectionFactory();
 		connectionFactory.setHost("localhost");
@@ -101,7 +102,7 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		return connectionFactory;
 	}
 
-	@After
+	@AfterEach
 	public void clear() throws Exception {
 		// Wait for broker communication to finish before trying to stop container
 		Thread.sleep(300L);
@@ -109,7 +110,6 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		if (container != null) {
 			container.shutdown();
 		}
-		this.brokerIsRunning.removeTestQueues();
 	}
 
 	@Test
@@ -238,11 +238,8 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		CountDownLatch latch = new CountDownLatch(messageCount);
 		ConnectionFactory connectionFactory2 = createConnectionFactory();
 		container = createContainer(queue.getName(), new AbortChannelListener(latch), connectionFactory2);
-		int n = 0;
-		while (n++ < 100 && container.getActiveConsumerCount() != concurrentConsumers) {
-			Thread.sleep(50L);
-		}
-		assertThat(container.getActiveConsumerCount()).isEqualTo(concurrentConsumers);
+		with().pollInterval(Duration.ofMillis(50))
+				.await().until(() -> container.getActiveConsumerCount() == this.concurrentConsumers);
 
 		for (int i = 0; i < messageCount; i++) {
 			template.convertAndSend(queue.getName(), i + "foo");
@@ -322,7 +319,7 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 	}
 
-	@Test(expected = AmqpIllegalStateException.class)
+	@Test
 	public void testListenerDoesNotRecoverFromMissingQueue() throws Exception {
 
 		concurrentConsumers = 3;
@@ -332,15 +329,12 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
 		admin.deleteQueue("nonexistent");
 
-		try {
-			container = createContainer("nonexistent", new VanillaListener(latch), connectionFactory);
-		}
-		finally {
-			((DisposableBean) connectionFactory).destroy();
-		}
+		assertThatExceptionOfType(AmqpIllegalStateException.class).isThrownBy(() ->
+			container = createContainer("nonexistent", new VanillaListener(latch), connectionFactory));
+		((DisposableBean) connectionFactory).destroy();
 	}
 
-	@Test(expected = AmqpIllegalStateException.class)
+	@Test
 	public void testSingleListenerDoesNotRecoverFromMissingQueue() throws Exception {
 		/*
 		 * A single listener sometimes doesn't have time to attempt to start before we ask it if it has failed, so this
@@ -352,12 +346,9 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		ConnectionFactory connectionFactory = createConnectionFactory();
 		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
 		admin.deleteQueue("nonexistent");
-		try {
-			container = createContainer("nonexistent", new VanillaListener(latch), connectionFactory);
-		}
-		finally {
-			((DisposableBean) connectionFactory).destroy();
-		}
+		assertThatExceptionOfType(AmqpIllegalStateException.class).isThrownBy(() ->
+			container = createContainer("nonexistent", new VanillaListener(latch), connectionFactory));
+		((DisposableBean) connectionFactory).destroy();
 	}
 
 	@Test

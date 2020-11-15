@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,6 +47,7 @@ import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.connection.ChannelProxy;
 import org.springframework.amqp.rabbit.connection.Connection;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactoryUtils;
@@ -54,6 +55,8 @@ import org.springframework.amqp.rabbit.connection.ConsumerChannelRegistry;
 import org.springframework.amqp.rabbit.connection.RabbitResourceHolder;
 import org.springframework.amqp.rabbit.connection.RabbitUtils;
 import org.springframework.amqp.rabbit.connection.SimpleResourceHolder;
+import org.springframework.amqp.rabbit.listener.support.ContainerUtils;
+import org.springframework.amqp.rabbit.support.ActiveObjectCounter;
 import org.springframework.amqp.rabbit.transaction.RabbitTransactionManager;
 import org.springframework.lang.Nullable;
 import org.springframework.scheduling.TaskScheduler;
@@ -471,11 +474,12 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 		final List<SimpleConsumer> consumersToCancel;
 		synchronized (this.consumersMonitor) {
 			consumersToCancel = this.consumers.stream()
-					.filter(c -> {
-						boolean open = c.getChannel().isOpen();
+					.filter(consumer -> {
+						boolean open = consumer.getChannel().isOpen() && !consumer.isAckFailed()
+								&& !consumer.targetChanged();
 						if (open && this.messagesPerAck > 1) {
 							try {
-								c.ackIfNecessary(now);
+								consumer.ackIfNecessary(now);
 							}
 							catch (IOException e) {
 								this.logger.error("Exception while sending delayed ack", e);
@@ -486,18 +490,18 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 					.collect(Collectors.toList());
 		}
 		consumersToCancel
-				.forEach(c -> {
+				.forEach(consumer -> {
 					try {
-						RabbitUtils.closeMessageConsumer(c.getChannel(),
-								Collections.singletonList(c.getConsumerTag()), isChannelTransacted());
+						RabbitUtils.closeMessageConsumer(consumer.getChannel(),
+								Collections.singletonList(consumer.getConsumerTag()), isChannelTransacted());
 					}
 					catch (Exception e) {
 						if (logger.isDebugEnabled()) {
-							logger.debug("Error closing consumer " + c, e);
+							logger.debug("Error closing consumer " + consumer, e);
 						}
 					}
-					this.logger.error("Consumer canceled - channel closed " + c);
-					c.cancelConsumer("Consumer " + c + " channel closed");
+					this.logger.error("Consumer canceled - channel closed " + consumer);
+					consumer.cancelConsumer("Consumer " + consumer + " channel closed");
 				});
 	}
 
@@ -580,7 +584,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 	protected void doRedeclareElementsIfNecessary() {
 		String routingLookupKey = getRoutingLookupKey();
 		if (routingLookupKey != null) {
-			SimpleResourceHolder.bind(getRoutingConnectionFactory(), routingLookupKey); // NOSONAR both never null here
+			SimpleResourceHolder.push(getRoutingConnectionFactory(), routingLookupKey); // NOSONAR both never null here
 		}
 		try {
 			redeclareElementsIfNecessary();
@@ -590,7 +594,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 		}
 		finally {
 			if (routingLookupKey != null) {
-				SimpleResourceHolder.unbind(getRoutingConnectionFactory()); // NOSONAR never null here
+				SimpleResourceHolder.pop(getRoutingConnectionFactory()); // NOSONAR never null here
 			}
 		}
 	}
@@ -656,13 +660,14 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 		}
 		String routingLookupKey = getRoutingLookupKey();
 		if (routingLookupKey != null) {
-			SimpleResourceHolder.bind(getRoutingConnectionFactory(), routingLookupKey); // NOSONAR both never null here
+			SimpleResourceHolder.push(getRoutingConnectionFactory(), routingLookupKey); // NOSONAR both never null here
 		}
 		Connection connection = null; // NOSONAR (close)
 		try {
 			connection = getConnectionFactory().createConnection();
 		}
 		catch (Exception e) {
+			publishConsumerFailedEvent(e.getMessage(), false, e);
 			addConsumerToRestart(new SimpleConsumer(null, null, queue));
 			throw e instanceof AmqpConnectException // NOSONAR exception type check
 					? (AmqpConnectException) e
@@ -670,7 +675,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 		}
 		finally {
 			if (routingLookupKey != null) {
-				SimpleResourceHolder.unbind(getRoutingConnectionFactory()); // NOSONAR never null here
+				SimpleResourceHolder.pop(getRoutingConnectionFactory()); // NOSONAR never null here
 			}
 		}
 		SimpleConsumer consumer = consume(queue, connection);
@@ -694,6 +699,14 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 		Channel channel = null;
 		SimpleConsumer consumer = null;
 		try {
+			if (getConsumeDelay() > 0) {
+				try {
+					Thread.sleep(getConsumeDelay());
+				}
+				catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+			}
 			channel = connection.createChannel(isChannelTransacted());
 			channel.basicQos(getPrefetchCount());
 			consumer = new SimpleConsumer(connection, channel, queue);
@@ -716,7 +729,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 	}
 
 	@Nullable
-	private SimpleConsumer handleConsumeException(String queue, SimpleConsumer consumerArg, Exception e) {
+	private SimpleConsumer handleConsumeException(String queue, @Nullable SimpleConsumer consumerArg, Exception e) {
 
 		SimpleConsumer consumer = consumerArg;
 		if (e.getCause() instanceof ShutdownSignalException
@@ -728,7 +741,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 		else if (e.getCause() instanceof ShutdownSignalException
 				&& RabbitUtils.isPassiveDeclarationChannelClose((ShutdownSignalException) e.getCause())) {
 			this.logger.error("Queue not present, scheduling consumer "
-				+ (consumer == null ? "for queue " + queue : consumer) + " for restart", e);
+					+ (consumer == null ? "for queue " + queue : consumer) + " for restart", e);
 		}
 		else if (this.logger.isWarnEnabled()) {
 			this.logger.warn("basicConsume failed, scheduling consumer "
@@ -751,7 +764,8 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 		boolean waitForConsumers = false;
 		synchronized (this.consumersMonitor) {
 			if (this.started || this.aborted) {
-				// Copy in the same order to avoid ConcurrentModificationException during remove in the cancelConsumer().
+				// Copy in the same order to avoid ConcurrentModificationException during remove in the
+				// cancelConsumer().
 				canceledConsumers = new LinkedList<>(this.consumers);
 				actualShutDown(canceledConsumers);
 				waitForConsumers = true;
@@ -811,15 +825,17 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 				this.logger.debug("Canceling " + consumer);
 			}
 			synchronized (consumer) {
-				consumer.canceled = true;
+				consumer.setCanceled(true);
 				if (this.messagesPerAck > 1) {
-					consumer.ackIfNecessary(0L);
+					try {
+						consumer.ackIfNecessary(0L);
+					}
+					catch (IOException e) {
+						this.logger.error("Exception while sending delayed ack", e);
+					}
 				}
 			}
-			consumer.getChannel().basicCancel(consumer.getConsumerTag());
-		}
-		catch (IOException e) {
-			this.logger.error("Failed to cancel consumer: " + consumer, e);
+			RabbitUtils.cancel(consumer.getChannel(), consumer.getConsumerTag());
 		}
 		finally {
 			this.consumers.remove(consumer);
@@ -869,11 +885,11 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 
 		private final long ackTimeout = DirectMessageListenerContainer.this.ackTimeout;
 
+		private final Channel targetChannel;
+
 		private int pendingAcks;
 
 		private long lastAck = System.currentTimeMillis();
-
-		private long lastDeliveryComplete = this.lastAck;
 
 		private long latestDeferredDeliveryTag;
 
@@ -885,11 +901,19 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 
 		private volatile boolean canceled;
 
-		private SimpleConsumer(Connection connection, Channel channel, String queue) {
+		private volatile boolean ackFailed;
+
+		SimpleConsumer(@Nullable Connection connection, @Nullable Channel channel, String queue) {
 			super(channel);
 			this.connection = connection;
 			this.queue = queue;
 			this.ackRequired = !getAcknowledgeMode().isAutoAck() && !getAcknowledgeMode().isManual();
+			if (channel instanceof ChannelProxy) {
+				this.targetChannel = ((ChannelProxy) channel).getTargetChannel();
+			}
+			else {
+				this.targetChannel = null;
+			}
 		}
 
 		private String getQueue() {
@@ -907,6 +931,32 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 		 */
 		int getEpoch() {
 			return this.epoch;
+		}
+
+		/**
+		 * Set to true to indicate this consumer is canceled and should send any pending
+		 * acks.
+		 * @param canceled the canceled to set
+		 */
+		void setCanceled(boolean canceled) {
+			this.canceled = canceled;
+		}
+
+		/**
+		 * True if an ack/nack failed (probably due to a closed channel).
+		 * @return the ackFailed
+		 */
+		boolean isAckFailed() {
+			return this.ackFailed;
+		}
+
+		/**
+		 * True if the channel is a proxy and the underlying channel has changed.
+		 * @return true if the condition exists.
+		 */
+		boolean targetChanged() {
+			return this.targetChannel != null
+					&& !((ChannelProxy) getChannel()).getTargetChannel().equals(this.targetChannel);
 		}
 
 		/**
@@ -932,9 +982,14 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 				this.logger.debug(this + " received " + message);
 			}
 			updateLastReceive();
+			Object data = message;
+			List<Message> debatched = debatch(message);
+			if (debatched != null) {
+				data = debatched;
+			}
 			if (this.transactionManager != null) {
 				try {
-					executeListenerInTransaction(message, deliveryTag);
+					executeListenerInTransaction(data, deliveryTag);
 				}
 				catch (WrappedTransactionException e) {
 					if (e.getCause() instanceof Error) {
@@ -952,7 +1007,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 			}
 			else {
 				try {
-					callExecuteListener(message, deliveryTag);
+					callExecuteListener(data, deliveryTag);
 				}
 				catch (Exception e) {
 					// NOSONAR
@@ -960,7 +1015,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 			}
 		}
 
-		private void executeListenerInTransaction(Message message, long deliveryTag) {
+		private void executeListenerInTransaction(Object data, long deliveryTag) {
 			if (this.isRabbitTxManager) {
 				ConsumerChannelRegistry.registerConsumerChannel(getChannel(), this.connectionFactory);
 			}
@@ -976,7 +1031,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 				}
 				// unbound in ResourceHolderSynchronization.beforeCompletion()
 				try {
-					callExecuteListener(message, deliveryTag);
+					callExecuteListener(data, deliveryTag);
 				}
 				catch (RuntimeException e1) {
 					prepareHolderForRollback(resourceHolder, e1);
@@ -989,10 +1044,10 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 			});
 		}
 
-		private void callExecuteListener(Message message, long deliveryTag) {
+		private void callExecuteListener(Object data, long deliveryTag) { // NOSONAR (complex)
 			boolean channelLocallyTransacted = isChannelLocallyTransacted();
 			try {
-				executeListener(getChannel(), message);
+				executeListener(getChannel(), data);
 				handleAck(deliveryTag, channelLocallyTransacted);
 			}
 			catch (ImmediateAcknowledgeAmqpException e) {
@@ -1038,6 +1093,10 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 					}
 				}
 			}
+			catch (Error e) { // NOSONAR
+				getJavaLangErrorHandler().handle(e);
+				throw e;
+			}
 		}
 
 		private void handleAck(long deliveryTag, boolean channelLocallyTransacted) {
@@ -1054,8 +1113,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 						synchronized (this) {
 							this.latestDeferredDeliveryTag = deliveryTag;
 							this.pendingAcks++;
-							this.lastDeliveryComplete = System.currentTimeMillis();
-							ackIfNecessary(this.lastDeliveryComplete);
+							ackIfNecessary(this.lastAck);
 						}
 					}
 					else if (!isChannelTransacted() || isLocallyTransacted) {
@@ -1067,6 +1125,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 				}
 			}
 			catch (Exception e) {
+				this.ackFailed = true;
 				this.logger.error("Error acking", e);
 			}
 		}
@@ -1077,7 +1136,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 		 * @param now the current time.
 		 * @throws IOException if one occurs.
 		 */
-		private synchronized void ackIfNecessary(long now) throws IOException {
+		synchronized void ackIfNecessary(long now) throws IOException {
 			if (this.pendingAcks >= this.messagesPerAck || (
 					this.pendingAcks > 0 && (now - this.lastAck > this.ackTimeout || this.canceled))) {
 				sendAck(now);
@@ -1088,7 +1147,7 @@ public class DirectMessageListenerContainer extends AbstractMessageListenerConta
 			if (isChannelTransacted()) {
 				RabbitUtils.rollbackIfNecessary(getChannel());
 			}
-			if (this.ackRequired) {
+			if (this.ackRequired || ContainerUtils.isRejectManual(e)) {
 				try {
 					if (this.messagesPerAck > 1) {
 						synchronized (this) {

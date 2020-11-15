@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 the original author or authors.
+ * Copyright 2014-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,30 +17,30 @@
 package org.springframework.amqp.rabbit.listener;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.junit.BrokerRunning;
+import org.springframework.amqp.rabbit.junit.RabbitAvailable;
 import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.beans.DirectFieldAccessor;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -51,10 +51,8 @@ import org.springframework.context.support.ClassPathXmlApplicationContext;
  * @author Artem Bilan
  * @since 1.3
  */
+@RabbitAvailable
 public class ListenFromAutoDeleteQueueTests {
-
-	@Rule
-	public BrokerRunning brokerIsRunning = BrokerRunning.isRunning();
 
 	private SimpleMessageListenerContainer listenerContainer1;
 
@@ -66,7 +64,7 @@ public class ListenFromAutoDeleteQueueTests {
 
 	private Queue expiringQueue;
 
-	@Before
+	@BeforeEach
 	public void setup() {
 		this.context = new ClassPathXmlApplicationContext(this.getClass().getSimpleName() + "-context.xml",
 				this.getClass());
@@ -75,7 +73,7 @@ public class ListenFromAutoDeleteQueueTests {
 		this.expiringQueue = context.getBean("xExpires", Queue.class);
 	}
 
-	@After
+	@AfterEach
 	public void tearDown() {
 		if (this.context != null) {
 			this.context.close();
@@ -118,12 +116,7 @@ public class ListenFromAutoDeleteQueueTests {
 		listenerContainer.stop();
 		RabbitAdmin admin = spy(TestUtils.getPropertyValue(listenerContainer, "amqpAdmin", RabbitAdmin.class));
 		new DirectFieldAccessor(listenerContainer).setPropertyValue("amqpAdmin", admin);
-		int n = 0;
-		while (admin.getQueueProperties(this.expiringQueue.getName()) != null && n < 100) {
-			Thread.sleep(100);
-			n++;
-		}
-		assertThat(n < 100).isTrue();
+		await().until(() -> admin.getQueueProperties(this.expiringQueue.getName()) == null);
 		listenerContainer.start();
 		template.convertAndSend(this.expiringQueue.getName(), "foo");
 		assertThat(queue.poll(10, TimeUnit.SECONDS)).isNotNull();
@@ -144,9 +137,9 @@ public class ListenFromAutoDeleteQueueTests {
 
 		//Prevent a long 'passiveDeclare' process
 		BlockingQueueConsumer consumer = mock(BlockingQueueConsumer.class);
-		doThrow(RuntimeException.class).when(consumer).start();
-//		when(consumer.getBackOffExecution()).thenReturn(mock(BackOffExecution.class));
-		when(listenerContainer.createBlockingQueueConsumer()).thenReturn(consumer);
+		willThrow(RuntimeException.class).given(consumer).start();
+//		given(consumer.getBackOffExecution()).willReturn(mock(BackOffExecution.class));
+		given(listenerContainer.createBlockingQueueConsumer()).willReturn(consumer);
 
 		listenerContainer.start();
 		listenerContainer.stop();

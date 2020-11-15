@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,14 +18,10 @@ package org.springframework.amqp.rabbit.test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doAnswer;
+import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.verify;
 
-import java.util.concurrent.TimeUnit;
-
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.AnonymousQueue;
 import org.springframework.amqp.core.Queue;
@@ -36,67 +32,48 @@ import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.junit.BrokerRunning;
+import org.springframework.amqp.rabbit.junit.RabbitAvailable;
 import org.springframework.amqp.rabbit.test.mockito.LatchCountDownAndCallRealMethodAnswer;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.messaging.handler.annotation.Header;
-import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
 /**
- * @author Gary Russell
- * @author Artem Bilan
+ * @author Miguel Gross Valle
  *
- * @since 1.6
+ * @since 2.1.15
  *
  */
-@ContextConfiguration
-@RunWith(SpringJUnit4ClassRunner.class)
+@SpringJUnitConfig
 @DirtiesContext
-public class ExampleRabbitListenerSpyTest {
-
-	@Rule
-	public BrokerRunning brokerRunning = BrokerRunning.isRunning();
+@RabbitAvailable
+public class RabbitListenerProxyTest {
 
 	@Autowired
 	private RabbitTemplate rabbitTemplate;
 
 	@Autowired
-	private Queue queue1;
-
-	@Autowired
-	private Queue queue2;
+	private Queue queue;
 
 	@Autowired
 	private RabbitListenerTestHarness harness;
 
 	@Test
-	public void testTwoWay() {
-		assertThat(this.rabbitTemplate.convertSendAndReceive(this.queue1.getName(), "foo")).isEqualTo("FOO");
-
+	public void testProxiedListenerSpy() throws Exception {
 		Listener listener = this.harness.getSpy("foo");
 		assertThat(listener).isNotNull();
+
+		LatchCountDownAndCallRealMethodAnswer answer = this.harness.getLatchAnswerFor("foo", 1);
+		willAnswer(answer).given(listener).foo(anyString());
+
+		this.rabbitTemplate.convertAndSend(this.queue.getName(), "foo");
+
+		assertThat(answer.await(10)).isTrue();
 		verify(listener).foo("foo");
-	}
-
-	@Test
-	public void testOneWay() throws Exception {
-		Listener listener = this.harness.getSpy("bar");
-		assertThat(listener).isNotNull();
-
-		LatchCountDownAndCallRealMethodAnswer answer = new LatchCountDownAndCallRealMethodAnswer(2);
-		doAnswer(answer).when(listener).foo(anyString(), anyString());
-
-		this.rabbitTemplate.convertAndSend(this.queue2.getName(), "bar");
-		this.rabbitTemplate.convertAndSend(this.queue2.getName(), "baz");
-
-		assertThat(answer.getLatch().await(10, TimeUnit.SECONDS)).isTrue();
-		verify(listener).foo("bar", this.queue2.getName());
-		verify(listener).foo("baz", this.queue2.getName());
+		assertThat(answer.getExceptions()).isEmpty();
 	}
 
 	@Configuration
@@ -106,7 +83,7 @@ public class ExampleRabbitListenerSpyTest {
 
 		@Bean
 		public Listener listener() {
-			return new Listener();
+			return (Listener) new ProxyFactory(new Listener(dependency())).getProxy();
 		}
 
 		@Bean
@@ -115,12 +92,7 @@ public class ExampleRabbitListenerSpyTest {
 		}
 
 		@Bean
-		public Queue queue1() {
-			return new AnonymousQueue();
-		}
-
-		@Bean
-		public Queue queue2() {
+		public Queue queue() {
 			return new AnonymousQueue();
 		}
 
@@ -141,19 +113,25 @@ public class ExampleRabbitListenerSpyTest {
 			return containerFactory;
 		}
 
+		@Bean
+		public String dependency() {
+			return "dependency";
+		}
+
 	}
 
 	public static class Listener {
 
-		@RabbitListener(id = "foo", queues = "#{queue1.name}")
-		public String foo(String foo) {
-			return foo.toUpperCase();
+		private final String dependency;
+
+		public Listener(String dependency) {
+			this.dependency = dependency;
 		}
 
-		@RabbitListener(id = "bar", queues = "#{queue2.name}")
-		public void foo(@Payload String foo, @Header("amqp_receivedRoutingKey") String rk) {
+		@RabbitListener(id = "foo", queues = "#{queue.name}")
+		public void foo(String foo) {
+			this.dependency.substring(0);
 		}
-
 	}
 
 }

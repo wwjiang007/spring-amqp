@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
@@ -40,6 +42,7 @@ import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.ImmediateAcknowledgeAmqpException;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.core.BatchMessageListener;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.core.MessagePostProcessor;
@@ -53,9 +56,12 @@ import org.springframework.amqp.rabbit.connection.RabbitAccessor;
 import org.springframework.amqp.rabbit.connection.RabbitResourceHolder;
 import org.springframework.amqp.rabbit.connection.RabbitUtils;
 import org.springframework.amqp.rabbit.connection.RoutingConnectionFactory;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareBatchMessageListener;
 import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.listener.exception.FatalListenerExecutionException;
 import org.springframework.amqp.rabbit.listener.exception.FatalListenerStartupException;
+import org.springframework.amqp.rabbit.listener.exception.MessageRejectedWhileStoppingException;
+import org.springframework.amqp.rabbit.listener.support.ContainerUtils;
 import org.springframework.amqp.rabbit.support.DefaultMessagePropertiesConverter;
 import org.springframework.amqp.rabbit.support.ListenerExecutionFailedException;
 import org.springframework.amqp.rabbit.support.MessagePropertiesConverter;
@@ -78,6 +84,7 @@ import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.Assert;
+import org.springframework.util.ClassUtils;
 import org.springframework.util.ErrorHandler;
 import org.springframework.util.StringUtils;
 import org.springframework.util.backoff.BackOff;
@@ -85,6 +92,10 @@ import org.springframework.util.backoff.FixedBackOff;
 
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ShutdownSignalException;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.Timer.Builder;
+import io.micrometer.core.instrument.Timer.Sample;
 
 /**
  * @author Mark Pollack
@@ -102,6 +113,10 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 		implements MessageListenerContainer, ApplicationContextAware, BeanNameAware, DisposableBean,
 		ApplicationEventPublisherAware {
 
+	private static final int EXIT_99 = 99;
+
+	private static final String UNCHECKED = "unchecked";
+
 	static final int DEFAULT_FAILED_DECLARATION_RETRY_INTERVAL = 5000;
 
 	public static final boolean DEFAULT_DEBATCHING_ENABLED = true;
@@ -115,11 +130,18 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 
 	public static final long DEFAULT_SHUTDOWN_TIMEOUT = 5000;
 
+	private static final boolean MICROMETER_PRESENT = ClassUtils.isPresent(
+			"io.micrometer.core.instrument.MeterRegistry", AbstractMessageListenerContainer.class.getClassLoader());
+
+	private final Object lifecycleMonitor = new Object();
+
 	private final ContainerDelegate delegate = this::actualInvokeListener;
 
 	protected final Object consumersMonitor = new Object(); //NOSONAR
 
 	private final Map<String, Object> consumerArgs = new HashMap<>();
+
+	private final Map<String, String> micrometerTags = new HashMap<>();
 
 	private ContainerDelegate proxy = this.delegate;
 
@@ -163,29 +185,25 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 
 	private int phase = Integer.MAX_VALUE;
 
-	private volatile boolean active = false;
+	private boolean active = false;
 
-	private volatile boolean running = false;
-
-	private final Object lifecycleMonitor = new Object();
-
-	private volatile List<Queue> queues = new CopyOnWriteArrayList<>();
+	private boolean running = false;
 
 	private ErrorHandler errorHandler = new ConditionalRejectingErrorHandler();
 
 	private boolean exposeListenerChannel = true;
 
-	private volatile MessageListener messageListener;
+	private MessageListener messageListener;
 
-	private volatile AcknowledgeMode acknowledgeMode = AcknowledgeMode.AUTO;
+	private AcknowledgeMode acknowledgeMode = AcknowledgeMode.AUTO;
 
-	private volatile boolean deBatchingEnabled = DEFAULT_DEBATCHING_ENABLED;
+	private boolean deBatchingEnabled = DEFAULT_DEBATCHING_ENABLED;
 
-	private volatile boolean initialized;
+	private boolean initialized;
 
 	private Collection<MessagePostProcessor> afterReceivePostProcessors;
 
-	private volatile ApplicationContext applicationContext;
+	private ApplicationContext applicationContext;
 
 	private String listenerId;
 
@@ -194,17 +212,17 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	@Nullable
 	private ConsumerTagStrategy consumerTagStrategy;
 
-	private volatile boolean exclusive;
+	private boolean exclusive;
 
-	private volatile boolean noLocal;
+	private boolean noLocal;
 
-	private volatile boolean defaultRequeueRejected = true;
+	private boolean defaultRequeueRejected = true;
 
-	private volatile int prefetchCount = DEFAULT_PREFETCH_COUNT;
+	private int prefetchCount = DEFAULT_PREFETCH_COUNT;
 
 	private long idleEventInterval;
 
-	private volatile long lastReceive = System.currentTimeMillis();
+	private long lastReceive = System.currentTimeMillis();
 
 	private boolean statefulRetryFatalWithNullMessageId = true;
 
@@ -219,6 +237,18 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	private String errorHandlerLoggerName = getClass().getName();
 
 	private BatchingStrategy batchingStrategy = new SimpleBatchingStrategy(0, 0, 0L);
+
+	private MicrometerHolder micrometerHolder;
+
+	private boolean micrometerEnabled = true;
+
+	private boolean isBatchListener;
+
+	private long consumeDelay;
+
+	private JavaLangErrorHandler javaLangErrorHandler = error -> System.exit(EXIT_99);
+
+	private volatile List<Queue> queues = new CopyOnWriteArrayList<>();
 
 	private volatile boolean lazyLoad;
 
@@ -403,6 +433,8 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	 */
 	public void setMessageListener(MessageListener messageListener) {
 		this.messageListener = messageListener;
+		this.isBatchListener = messageListener instanceof BatchMessageListener
+				|| messageListener instanceof ChannelAwareBatchMessageListener;
 	}
 
 	/**
@@ -429,7 +461,7 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 
 	/**
 	 * Set an ErrorHandler to be invoked in case of any uncaught exceptions thrown while processing a Message. By
-	 * default there will be <b>no</b> ErrorHandler so that error-level logging is the only result.
+	 * default a {@link ConditionalRejectingErrorHandler} with its default list of fatal exceptions will be used.
 	 *
 	 * @param errorHandler The error handler.
 	 */
@@ -445,6 +477,10 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	 */
 	public void setDeBatchingEnabled(boolean deBatchingEnabled) {
 		this.deBatchingEnabled = deBatchingEnabled;
+	}
+
+	protected boolean isDeBatchingEnabled() {
+		return this.deBatchingEnabled;
 	}
 
 	/**
@@ -485,15 +521,15 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	 * <p>
 	 * In contrast to {@link #setAfterReceivePostProcessors(MessagePostProcessor...)}, this
 	 * method does not override the previously added afterReceivePostProcessors.
-	 * @param afterReceivePostProcessors the post processor.
+	 * @param postprocessors the post processor.
 	 * @since 2.1.4
 	 */
-	public void addAfterReceivePostProcessors(MessagePostProcessor... afterReceivePostProcessors) {
-		Assert.notNull(afterReceivePostProcessors, "'afterReceivePostProcessors' cannot be null");
+	public void addAfterReceivePostProcessors(MessagePostProcessor... postprocessors) {
+		Assert.notNull(postprocessors, "'afterReceivePostProcessors' cannot be null");
 		if (this.afterReceivePostProcessors == null) {
 			this.afterReceivePostProcessors = new ArrayList<>();
 		}
-		this.afterReceivePostProcessors.addAll(Arrays.asList(afterReceivePostProcessors));
+		this.afterReceivePostProcessors.addAll(Arrays.asList(postprocessors));
 		this.afterReceivePostProcessors = MessagePostProcessorUtils.sort(this.afterReceivePostProcessors);
 	}
 
@@ -623,10 +659,14 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	@Nullable
 	protected String getRoutingLookupKey() {
 		return super.getConnectionFactory() instanceof RoutingConnectionFactory
-				? this.lookupKeyQualifier + "[" + this.queues.stream()
-				.map(Queue::getName)
-				.collect(Collectors.joining(",")) + "]"
+				? this.lookupKeyQualifier + queuesAsListString()
 				: null;
+	}
+
+	private String queuesAsListString() {
+		return "[" + this.queues.stream()
+				.map(Queue::getName)
+				.collect(Collectors.joining(",")) + "]";
 	}
 
 	/**
@@ -692,8 +732,10 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	 * @return the arguments.
 	 * @since 2.0
 	 */
-	protected Map<String, Object> getConsumerArguments() {
-		return this.consumerArgs;
+	public Map<String, Object> getConsumerArguments() {
+		synchronized (this.consumersMonitor) {
+			return new HashMap<>(this.consumerArgs);
+		}
 	}
 
 	/**
@@ -1059,6 +1101,69 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 		this.batchingStrategy = batchingStrategy;
 	}
 
+	protected BatchingStrategy getBatchingStrategy() {
+		return this.batchingStrategy;
+	}
+
+	protected Collection<MessagePostProcessor> getAfterReceivePostProcessors() {
+		return this.afterReceivePostProcessors;
+	}
+
+	/**
+	 * Set additional tags for the Micrometer listener timers.
+	 * @param tags the tags.
+	 * @since 2.2
+	 */
+	public void setMicrometerTags(Map<String, String> tags) {
+		if (tags != null) {
+			this.micrometerTags.putAll(tags);
+		}
+	}
+
+	/**
+	 * Set to false to disable micrometer listener timers.
+	 * @param micrometerEnabled false to disable.
+	 * @since 2.2
+	 */
+	public void setMicrometerEnabled(boolean micrometerEnabled) {
+		this.micrometerEnabled = micrometerEnabled;
+	}
+
+	/**
+	 * Get the consumeDelay - a time to wait before consuming in ms.
+	 * @return the consume delay.
+	 * @since 2.3
+	 */
+	protected long getConsumeDelay() {
+		return this.consumeDelay;
+	}
+
+	/**
+	 * Set the consumeDelay - a time to wait before consuming in ms. This is useful when
+	 * using the sharding plugin with {@code concurrency > 1}, to avoid uneven distribution of
+	 * consumers across the shards. See the plugin README for more information.
+	 * @param consumeDelay the consume delay.
+	 * @since 2.3
+	 */
+	public void setConsumeDelay(long consumeDelay) {
+		this.consumeDelay = consumeDelay;
+	}
+
+	protected JavaLangErrorHandler getJavaLangErrorHandler() {
+		return this.javaLangErrorHandler;
+	}
+
+	/**
+	 * Provide a JavaLangErrorHandler implementation; by default, {@code System.exit(99)}
+	 * is called.
+	 * @param javaLangErrorHandler the handler.
+	 * @since 2.2.12
+	 */
+	public void setjavaLangErrorHandler(JavaLangErrorHandler javaLangErrorHandler) {
+		Assert.notNull(javaLangErrorHandler, "'javaLangErrorHandler' cannot be null");
+		this.javaLangErrorHandler = javaLangErrorHandler;
+	}
+
 	/**
 	 * Delegates to {@link #validateConfiguration()} and {@link #initialize()}.
 	 */
@@ -1077,6 +1182,20 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 						"channelTransacted=false");
 		validateConfiguration();
 		initialize();
+		try {
+			if (this.micrometerHolder == null && MICROMETER_PRESENT && this.micrometerEnabled
+					&& this.applicationContext != null) {
+				String id = getListenerId();
+				if (id == null) {
+					id = "no_id_or_beanName";
+				}
+				this.micrometerHolder = new MicrometerHolder(this.applicationContext, id,
+						this.micrometerTags);
+			}
+		}
+		catch (IllegalStateException e) {
+			this.logger.debug("Could not enable micrometer timers", e);
+		}
 	}
 
 	@Override
@@ -1112,6 +1231,9 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	@Override
 	public void destroy() {
 		shutdown();
+		if (this.micrometerHolder != null) {
+			this.micrometerHolder.destroy();
+		}
 	}
 
 	// -------------------------------------------------------------------------
@@ -1331,70 +1453,102 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	/**
 	 * Execute the specified listener, committing or rolling back the transaction afterwards (if necessary).
 	 * @param channel the Rabbit Channel to operate on
-	 * @param messageIn the received Rabbit Message
+	 * @param data the received Rabbit Message
 	 * @see #invokeListener
 	 * @see #handleListenerException
 	 */
-	protected void executeListener(Channel channel, Message messageIn) {
+	@SuppressWarnings(UNCHECKED)
+	protected void executeListener(Channel channel, Object data) {
 		if (!isRunning()) {
 			if (logger.isWarnEnabled()) {
-				logger.warn("Rejecting received message because the listener container has been stopped: " + messageIn);
+				logger.warn(
+						"Rejecting received message(s) because the listener container has been stopped: " + data);
 			}
 			throw new MessageRejectedWhileStoppingException();
 		}
+		Object sample = null;
+		if (this.micrometerHolder != null) {
+			sample = this.micrometerHolder.start();
+		}
 		try {
-			doExecuteListener(channel, messageIn);
+			doExecuteListener(channel, data);
+			if (sample != null) {
+				this.micrometerHolder.success(sample, data instanceof Message
+						? ((Message) data).getMessageProperties().getConsumerQueue()
+						: queuesAsListString());
+			}
 		}
 		catch (RuntimeException ex) {
-			if (messageIn.getMessageProperties().isFinalRetryForMessageWithNoId()) {
-				if (this.statefulRetryFatalWithNullMessageId) {
-					throw new FatalListenerExecutionException(
-							"Illegal null id in message. Failed to manage retry for message: " + messageIn, ex);
-				}
-				else {
-					throw new ListenerExecutionFailedException("Cannot retry message more than once without an ID",
-							new AmqpRejectAndDontRequeueException("Not retryable; rejecting and not requeuing", ex),
-							messageIn);
-				}
+			if (sample != null) {
+				this.micrometerHolder.failure(sample, data instanceof Message
+						? ((Message) data).getMessageProperties().getConsumerQueue()
+						: queuesAsListString(), ex.getClass().getSimpleName());
 			}
+			Message message;
+			if (data instanceof Message) {
+				message = (Message) data;
+			}
+			else {
+				message = ((List<Message>) data).get(0);
+			}
+			checkStatefulRetry(ex, message);
 			handleListenerException(ex);
 			throw ex;
 		}
 	}
 
-	private void doExecuteListener(Channel channel, Message messageIn) {
-		Message message = messageIn;
-		if (this.afterReceivePostProcessors != null) {
-			for (MessagePostProcessor processor : this.afterReceivePostProcessors) {
-				message = processor.postProcessMessage(message);
-				if (message == null) {
-					throw new ImmediateAcknowledgeAmqpException(
-							"Message Post Processor returned 'null', discarding message");
-				}
+	private void checkStatefulRetry(RuntimeException ex, Message message) {
+		if (message.getMessageProperties().isFinalRetryForMessageWithNoId()) {
+			if (this.statefulRetryFatalWithNullMessageId) {
+				throw new FatalListenerExecutionException(
+						"Illegal null id in message. Failed to manage retry for message: " + message, ex);
 			}
-		}
-		if (this.deBatchingEnabled && this.batchingStrategy.canDebatch(message.getMessageProperties())) {
-			this.batchingStrategy.deBatch(message, fragment -> invokeListener(channel, fragment));
-		}
-		else {
-			invokeListener(channel, message);
+			else {
+				throw new ListenerExecutionFailedException("Cannot retry message more than once without an ID",
+						new AmqpRejectAndDontRequeueException("Not retryable; rejecting and not requeuing", ex),
+						message);
+			}
 		}
 	}
 
-	protected void invokeListener(Channel channel, Message message) {
-		this.proxy.invokeListener(channel, message);
+	private void doExecuteListener(Channel channel, Object data) {
+		if (data instanceof Message) {
+			Message message = (Message) data;
+			if (this.afterReceivePostProcessors != null) {
+				for (MessagePostProcessor processor : this.afterReceivePostProcessors) {
+					message = processor.postProcessMessage(message);
+					if (message == null) {
+						throw new ImmediateAcknowledgeAmqpException(
+								"Message Post Processor returned 'null', discarding message");
+					}
+				}
+			}
+			if (this.deBatchingEnabled && this.batchingStrategy.canDebatch(message.getMessageProperties())) {
+				this.batchingStrategy.deBatch(message, fragment -> invokeListener(channel, fragment));
+			}
+			else {
+				invokeListener(channel, message);
+			}
+		}
+		else {
+			invokeListener(channel, data);
+		}
+	}
+
+	protected void invokeListener(Channel channel, Object data) {
+		this.proxy.invokeListener(channel, data);
 	}
 
 	/**
 	 * Invoke the specified listener: either as standard MessageListener or (preferably) as SessionAwareMessageListener.
 	 * @param channel the Rabbit Channel to operate on
-	 * @param message the received Rabbit Message
+	 * @param data the received Rabbit Message or List of Message.
 	 * @see #setMessageListener(MessageListener)
 	 */
-	protected void actualInvokeListener(Channel channel, Message message) {
+	protected void actualInvokeListener(Channel channel, Object data) {
 		Object listener = getMessageListener();
 		if (listener instanceof ChannelAwareMessageListener) {
-			doInvokeListener((ChannelAwareMessageListener) listener, channel, message);
+			doInvokeListener((ChannelAwareMessageListener) listener, channel, data);
 		}
 		else if (listener instanceof MessageListener) {
 			boolean bindChannel = isExposeListenerChannel() && isChannelLocallyTransacted();
@@ -1405,7 +1559,7 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 						resourceHolder);
 			}
 			try {
-				doInvokeListener((MessageListener) listener, message);
+				doInvokeListener((MessageListener) listener, data);
 			}
 			finally {
 				if (bindChannel) {
@@ -1429,12 +1583,14 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	 * An exception thrown from the listener will be wrapped in a {@link ListenerExecutionFailedException}.
 	 * @param listener the Spring ChannelAwareMessageListener to invoke
 	 * @param channel the Rabbit Channel to operate on
-	 * @param message the received Rabbit Message
+	 * @param data the received Rabbit Message or List of Message.
 	 * @see ChannelAwareMessageListener
 	 * @see #setExposeListenerChannel(boolean)
 	 */
-	protected void doInvokeListener(ChannelAwareMessageListener listener, Channel channel, Message message) {
+	@SuppressWarnings(UNCHECKED)
+	protected void doInvokeListener(ChannelAwareMessageListener listener, Channel channel, Object data) {
 
+		Message message = null;
 		RabbitResourceHolder resourceHolder = null;
 		Channel channelToUse = channel;
 		boolean boundHere = false;
@@ -1468,10 +1624,16 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 			}
 			// Actually invoke the message listener...
 			try {
-				listener.onMessage(message, channelToUse);
+				if (data instanceof List) {
+					listener.onMessageBatch((List<Message>) data, channelToUse);
+				}
+				else {
+					message = (Message) data;
+					listener.onMessage(message, channelToUse);
+				}
 			}
 			catch (Exception e) {
-				throw wrapToListenerExecutionFailedExceptionIfNeeded(e, message);
+				throw wrapToListenerExecutionFailedExceptionIfNeeded(e, data);
 			}
 		}
 		finally {
@@ -1510,16 +1672,24 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	 * Exception thrown from listener will be wrapped to {@link ListenerExecutionFailedException}.
 	 *
 	 * @param listener the Rabbit MessageListener to invoke
-	 * @param message the received Rabbit Message
+	 * @param data the received Rabbit Message or List of Message.
 	 *
 	 * @see org.springframework.amqp.core.MessageListener#onMessage
 	 */
-	protected void doInvokeListener(MessageListener listener, Message message) {
+	@SuppressWarnings(UNCHECKED)
+	protected void doInvokeListener(MessageListener listener, Object data) {
+		Message message = null;
 		try {
-			listener.onMessage(message);
+			if (data instanceof List) {
+				listener.onMessageBatch((List<Message>) data);
+			}
+			else {
+				message = (Message) data;
+				listener.onMessage(message);
+			}
 		}
 		catch (Exception e) {
-			throw wrapToListenerExecutionFailedExceptionIfNeeded(e, message);
+			throw wrapToListenerExecutionFailedExceptionIfNeeded(e, data);
 		}
 	}
 
@@ -1558,16 +1728,23 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 
 	/**
 	 * @param e The Exception.
-	 * @param message The failed message.
+	 * @param data The failed message.
 	 * @return If 'e' is of type {@link ListenerExecutionFailedException} - return 'e' as it is, otherwise wrap it to
 	 * {@link ListenerExecutionFailedException} and return.
 	 */
+	@SuppressWarnings(UNCHECKED)
 	protected ListenerExecutionFailedException wrapToListenerExecutionFailedExceptionIfNeeded(Exception e,
-			Message message) {
+			Object data) {
 
 		if (!(e instanceof ListenerExecutionFailedException)) {
 			// Wrap exception to ListenerExecutionFailedException.
-			return new ListenerExecutionFailedException("Listener threw exception", e, message);
+			if (data instanceof List) {
+				return new ListenerExecutionFailedException("Listener threw exception", e,
+						((List<Message>) data).toArray(new Message[0]));
+			}
+			else {
+				return new ListenerExecutionFailedException("Listener threw exception", e, (Message) data);
+			}
 		}
 		return (ListenerExecutionFailedException) e;
 	}
@@ -1777,7 +1954,7 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	}
 
 	private void checkPossibleAuthenticationFailureFatalFromProperty() {
-		if (!isPossibleAuthenticationFailureFatal()) {
+		if (!isPossibleAuthenticationFailureFatalSet()) {
 			try {
 				ApplicationContext context = getApplicationContext();
 				if (context != null) {
@@ -1796,10 +1973,37 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 		}
 	}
 
+	@Nullable
+	protected List<Message> debatch(Message message) {
+		if (this.isBatchListener && isDeBatchingEnabled()
+				&& getBatchingStrategy().canDebatch(message.getMessageProperties())) {
+			final List<Message> messageList = new ArrayList<>();
+			getBatchingStrategy().deBatch(message, fragment -> messageList.add(fragment));
+			return messageList;
+		}
+		return null;
+	}
+
 	@FunctionalInterface
 	private interface ContainerDelegate {
 
-		void invokeListener(Channel channel, Message message);
+		void invokeListener(Channel channel, Object data);
+
+	}
+
+	/**
+	 * A handler for {@link Error} on the container thread(s).
+	 * @since 2.2.12
+	 *
+	 */
+	@FunctionalInterface
+	public interface JavaLangErrorHandler {
+
+		/**
+		 * Handle the error; typically, the JVM will be terminated.
+		 * @param error the error.
+		 */
+		void handle(Error error);
 
 	}
 
@@ -1840,7 +2044,6 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	private static class DefaultExclusiveConsumerLogger implements ConditionalExceptionLogger {
 
 		DefaultExclusiveConsumerLogger() {
-			super();
 		}
 
 		@Override
@@ -1861,6 +2064,74 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 					logger.error("Unexpected invocation of " + getClass() + ", with message: " + message, t);
 				}
 			}
+		}
+
+	}
+
+	private static final class MicrometerHolder {
+
+		private final ConcurrentMap<String, Timer> timers = new ConcurrentHashMap<>();
+
+		private final MeterRegistry registry;
+
+		private final Map<String, String> tags;
+
+		private final String listenerId;
+
+		MicrometerHolder(@Nullable ApplicationContext context, String listenerId, Map<String, String> tags) {
+			if (context == null) {
+				throw new IllegalStateException("No micrometer registry present");
+			}
+			Map<String, MeterRegistry> registries = context.getBeansOfType(MeterRegistry.class, false, false);
+			if (registries.size() == 1) {
+				this.registry = registries.values().iterator().next();
+				this.listenerId = listenerId;
+				this.tags = tags;
+			}
+			else {
+				throw new IllegalStateException("No micrometer registry present");
+			}
+		}
+
+		Object start() {
+			return Timer.start(this.registry);
+		}
+
+		void success(Object sample, String queue) {
+			Timer timer = this.timers.get(queue + "none");
+			if (timer == null) {
+				timer = buildTimer(this.listenerId, "success", queue, "none");
+			}
+			((Sample) sample).stop(timer);
+		}
+
+		void failure(Object sample, String queue, String exception) {
+			Timer timer = this.timers.get(queue + exception);
+			if (timer == null) {
+				timer = buildTimer(this.listenerId, "failure", queue, exception);
+			}
+			((Sample) sample).stop(timer);
+		}
+
+		private Timer buildTimer(String aListenerId, String result, String queue, String exception) {
+
+			Builder builder = Timer.builder("spring.rabbitmq.listener")
+					.description("Spring RabbitMQ Listener")
+					.tag("listener.id", aListenerId)
+					.tag("queue", queue)
+					.tag("result", result)
+					.tag("exception", exception);
+			if (this.tags != null && !this.tags.isEmpty()) {
+				this.tags.forEach((key, value) -> builder.tag(key, value));
+			}
+			Timer registeredTimer = builder.register(this.registry);
+			this.timers.put(queue + exception, registeredTimer);
+			return registeredTimer;
+		}
+
+		void destroy() {
+			this.timers.values().forEach(this.registry::remove);
+			this.timers.clear();
 		}
 
 	}

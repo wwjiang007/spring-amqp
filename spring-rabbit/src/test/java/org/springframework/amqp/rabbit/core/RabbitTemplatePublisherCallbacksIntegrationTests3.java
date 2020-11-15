@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2019 the original author or authors.
+ * Copyright 2018-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,11 +21,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
+import org.springframework.amqp.rabbit.connection.CachingConnectionFactory.ConfirmType;
 import org.springframework.amqp.rabbit.connection.Connection;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.junit.RabbitAvailable;
@@ -54,16 +56,16 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests3 {
 	public void testRepublishOnNackThreadNoExchange() throws Exception {
 		CachingConnectionFactory cf = new CachingConnectionFactory(
 				RabbitAvailableCondition.getBrokerRunning().getConnectionFactory());
-		cf.setPublisherConfirms(true);
+		cf.setPublisherConfirmType(ConfirmType.CORRELATED);
 		final RabbitTemplate template = new RabbitTemplate(cf);
 		final CountDownLatch confirmLatch = new CountDownLatch(2);
 		template.setConfirmCallback((cd, a, c) -> {
-			if (confirmLatch.getCount() == 2) {
-				template.convertAndSend(QUEUE1, ((MyCD) cd).payload);
-			}
 			confirmLatch.countDown();
+			if (confirmLatch.getCount() == 1) {
+				template.convertAndSend(QUEUE1, cd.getId());
+			}
 		});
-		template.convertAndSend("bad.exchange", "junk", "foo", new MyCD("foo"));
+		template.convertAndSend("bad.exchange", "junk", "foo", new CorrelationData("foo"));
 		assertThat(confirmLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(template.receive(QUEUE1, 10_000)).isNotNull();
 	}
@@ -73,16 +75,18 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests3 {
 		final CachingConnectionFactory cf = new CachingConnectionFactory(
 				RabbitAvailableCondition.getBrokerRunning().getConnectionFactory());
 		cf.setPublisherReturns(true);
-		cf.setPublisherConfirms(true);
+		cf.setPublisherConfirmType(ConfirmType.CORRELATED);
 		final RabbitTemplate template = new RabbitTemplate(cf);
 		final CountDownLatch returnLatch = new CountDownLatch(1);
 		final CountDownLatch confirmLatch = new CountDownLatch(1);
 		final AtomicInteger cacheCount = new AtomicInteger();
+		final AtomicBoolean returnCalledFirst = new AtomicBoolean();
 		template.setConfirmCallback((cd, a, c) -> {
 			cacheCount.set(TestUtils.getPropertyValue(cf, "cachedChannelsNonTransactional", List.class).size());
+			returnCalledFirst.set(returnLatch.getCount() == 0);
 			confirmLatch.countDown();
 		});
-		template.setReturnCallback((m, r, rt, e, rk) -> {
+		template.setReturnsCallback((returned) -> {
 			returnLatch.countDown();
 		});
 		template.setMandatory(true);
@@ -93,10 +97,13 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests3 {
 		channel2.close();
 		conn.close();
 		assertThat(TestUtils.getPropertyValue(cf, "cachedChannelsNonTransactional", List.class).size()).isEqualTo(2);
-		template.convertAndSend("", QUEUE2 + "junk", "foo", new MyCD("foo"));
+		CorrelationData correlationData = new CorrelationData("foo");
+		template.convertAndSend("", QUEUE2 + "junk", "foo", correlationData);
 		assertThat(returnLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(confirmLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(cacheCount.get()).isEqualTo(1);
+		assertThat(returnCalledFirst.get()).isTrue();
+		assertThat(correlationData.getReturnedMessage()).isNotNull();
 		cf.destroy();
 	}
 
@@ -104,7 +111,7 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests3 {
 	public void testDeferredChannelCacheAck() throws Exception {
 		final CachingConnectionFactory cf = new CachingConnectionFactory(
 				RabbitAvailableCondition.getBrokerRunning().getConnectionFactory());
-		cf.setPublisherConfirms(true);
+		cf.setPublisherConfirmType(ConfirmType.CORRELATED);
 		final RabbitTemplate template = new RabbitTemplate(cf);
 		final CountDownLatch confirmLatch = new CountDownLatch(1);
 		final AtomicInteger cacheCount = new AtomicInteger();
@@ -120,7 +127,7 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests3 {
 		channel2.close();
 		conn.close();
 		assertThat(TestUtils.getPropertyValue(cf, "cachedChannelsNonTransactional", List.class).size()).isEqualTo(2);
-		template.convertAndSend("", QUEUE2, "foo", new MyCD("foo"));
+		template.convertAndSend("", QUEUE2, "foo", new CorrelationData("foo"));
 		assertThat(confirmLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(cacheCount.get()).isEqualTo(1);
 		cf.destroy();
@@ -130,29 +137,18 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests3 {
 	public void testTwoSendsAndReceivesDRTMLC() throws Exception {
 		CachingConnectionFactory cf = new CachingConnectionFactory(
 				RabbitAvailableCondition.getBrokerRunning().getConnectionFactory());
-		cf.setPublisherConfirms(true);
+		cf.setPublisherConfirmType(ConfirmType.CORRELATED);
 		RabbitTemplate template = new RabbitTemplate(cf);
 		template.setReplyTimeout(0);
 		final CountDownLatch confirmLatch = new CountDownLatch(2);
 		template.setConfirmCallback((cd, a, c) -> {
 			confirmLatch.countDown();
 		});
-		template.convertSendAndReceive("", QUEUE3, "foo", new MyCD("foo"));
-		template.convertSendAndReceive("", QUEUE3, "foo", new MyCD("foo")); // listener not registered
+		template.convertSendAndReceive("", QUEUE3, "foo", new CorrelationData("foo"));
+		template.convertSendAndReceive("", QUEUE3, "foo", new CorrelationData("foo")); // listener not registered
 		assertThat(confirmLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(template.receive(QUEUE3, 10_000)).isNotNull();
 		assertThat(template.receive(QUEUE3, 10_000)).isNotNull();
-	}
-
-
-	private static class MyCD extends CorrelationData {
-
-		final String payload;
-
-		MyCD(String payload) {
-			this.payload = payload;
-		}
-
 	}
 
 }

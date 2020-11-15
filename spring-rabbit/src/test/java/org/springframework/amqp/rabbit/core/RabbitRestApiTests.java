@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 the original author or authors.
+ * Copyright 2015-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.springframework.amqp.rabbit.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import java.net.MalformedURLException;
 import java.net.URISyntaxException;
@@ -25,9 +26,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import org.junit.After;
-import org.junit.ClassRule;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
@@ -36,7 +36,7 @@ import org.springframework.amqp.core.Exchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
-import org.springframework.amqp.rabbit.junit.BrokerRunning;
+import org.springframework.amqp.rabbit.junit.RabbitAvailable;
 
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.DefaultConsumer;
@@ -52,21 +52,18 @@ import com.rabbitmq.http.client.domain.QueueInfo;
  * @since 1.5
  *
  */
+@RabbitAvailable(management = true)
 public class RabbitRestApiTests {
 
 	private final CachingConnectionFactory connectionFactory = new CachingConnectionFactory("localhost");
 
 	private final Client rabbitRestClient;
 
-
-	@ClassRule
-	public static BrokerRunning brokerAndManagementRunning = BrokerRunning.isBrokerAndManagementRunning();
-
 	public RabbitRestApiTests() throws MalformedURLException, URISyntaxException {
 		this.rabbitRestClient = new Client("http://localhost:15672/api/", "guest", "guest");
 	}
 
-	@After
+	@AfterEach
 	public void tearDown() {
 		connectionFactory.destroy();
 	}
@@ -183,12 +180,8 @@ public class RabbitRestApiTests {
 		admin.declareQueue(queue2);
 		Channel channel = this.connectionFactory.createConnection().createChannel(false);
 		String consumer = channel.basicConsume(queue1.getName(), false, "", false, true, null, new DefaultConsumer(channel));
-		QueueInfo qi = this.rabbitRestClient.getQueue("/", queue1.getName());
-		int n = 0;
-		while (n++ < 100 && (qi.getExclusiveConsumerTag() == null || qi.getExclusiveConsumerTag().equals(""))) {
-			Thread.sleep(100);
-			qi = this.rabbitRestClient.getQueue("/", queue1.getName());
-		}
+		QueueInfo qi = await().until(() -> this.rabbitRestClient.getQueue("/", queue1.getName()),
+				info -> info.getExclusiveConsumerTag() != null && !"".equals(info.getExclusiveConsumerTag()));
 		QueueInfo queueOut = this.rabbitRestClient.getQueue("/", queue1.getName());
 		assertThat(queueOut.isDurable()).isFalse();
 		assertThat(queueOut.isExclusive()).isFalse();

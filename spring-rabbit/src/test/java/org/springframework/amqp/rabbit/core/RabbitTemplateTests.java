@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.springframework.amqp.rabbit.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.BDDMockito.willReturn;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -43,25 +45,31 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import org.springframework.amqp.AmqpAuthenticationException;
+import org.springframework.amqp.AmqpConnectException;
 import org.springframework.amqp.AmqpException;
+import org.springframework.amqp.AmqpIOException;
 import org.springframework.amqp.core.Address;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.ReceiveAndReplyCallback;
+import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.rabbit.connection.AbstractRoutingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ChannelProxy;
 import org.springframework.amqp.rabbit.connection.PublisherCallbackChannel;
+import org.springframework.amqp.rabbit.connection.RabbitUtils;
 import org.springframework.amqp.rabbit.connection.SimpleRoutingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.SingleConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate.ReturnsCallback;
 import org.springframework.amqp.support.converter.SimpleMessageConverter;
 import org.springframework.amqp.utils.SerializationUtils;
+import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.context.ApplicationContext;
 import org.springframework.expression.Expression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
@@ -228,6 +236,72 @@ public class RabbitTemplateTests {
 	}
 
 	@Test
+	public void testEvaluateDirectReplyToWithConnectException() throws Exception {
+		org.springframework.amqp.rabbit.connection.ConnectionFactory mockConnectionFactory =
+				mock(org.springframework.amqp.rabbit.connection.ConnectionFactory.class);
+		willThrow(new AmqpConnectException(null)).given(mockConnectionFactory).createConnection();
+		RabbitTemplate template = new RabbitTemplate(mockConnectionFactory);
+		assertThatThrownBy(() -> template.convertSendAndReceive("foo")).isInstanceOf(AmqpConnectException.class);
+		assertThat(TestUtils.getPropertyValue(template, "evaluatedFastReplyTo", Boolean.class)).isFalse();
+	}
+
+	@Test
+	public void testEvaluateDirectReplyToWithIOException() throws Exception {
+		org.springframework.amqp.rabbit.connection.ConnectionFactory mockConnectionFactory =
+				mock(org.springframework.amqp.rabbit.connection.ConnectionFactory.class);
+		willThrow(new AmqpIOException(null)).given(mockConnectionFactory).createConnection();
+		RabbitTemplate template = new RabbitTemplate(mockConnectionFactory);
+		assertThatThrownBy(() -> template.convertSendAndReceive("foo")).isInstanceOf(AmqpIOException.class);
+		assertThat(TestUtils.getPropertyValue(template, "evaluatedFastReplyTo", Boolean.class)).isFalse();
+	}
+
+	@Test
+	public void testEvaluateDirectReplyToWithIOExceptionDeclareFailed() throws Exception {
+		ConnectionFactory mockConnectionFactory = mock(ConnectionFactory.class);
+		Connection mockConnection = mock(Connection.class);
+		Channel mockChannel = mock(Channel.class);
+
+		given(mockConnectionFactory.newConnection(any(ExecutorService.class), anyString())).willReturn(mockConnection);
+		given(mockConnection.isOpen()).willReturn(true);
+		given(mockConnection.createChannel()).willReturn(mockChannel);
+		AMQP.Channel.Close mockMethod = mock(AMQP.Channel.Close.class);
+		given(mockMethod.getReplyCode()).willReturn(AMQP.NOT_FOUND);
+		given(mockMethod.getClassId()).willReturn(RabbitUtils.QUEUE_CLASS_ID_50);
+		given(mockMethod.getMethodId()).willReturn(RabbitUtils.DECLARE_METHOD_ID_10);
+		willThrow(new ShutdownSignalException(true, false, mockMethod, null)).given(mockChannel)
+				.queueDeclarePassive(Address.AMQ_RABBITMQ_REPLY_TO);
+		given(mockChannel.queueDeclare()).willReturn(new AMQImpl.Queue.DeclareOk("foo", 0, 0));
+		SingleConnectionFactory connectionFactory = new SingleConnectionFactory(mockConnectionFactory);
+		connectionFactory.setExecutor(mock(ExecutorService.class));
+		RabbitTemplate template = new RabbitTemplate(connectionFactory);
+		template.setReplyTimeout(1);
+		template.convertSendAndReceive("foo");
+		assertThat(TestUtils.getPropertyValue(template, "evaluatedFastReplyTo", Boolean.class)).isTrue();
+		assertThat(TestUtils.getPropertyValue(template, "usingFastReplyTo", Boolean.class)).isFalse();
+	}
+
+	@Test
+	public void testEvaluateDirectReplyToOK() throws Exception {
+		ConnectionFactory mockConnectionFactory = mock(ConnectionFactory.class);
+		Connection mockConnection = mock(Connection.class);
+		Channel mockChannel = mock(Channel.class);
+		given(mockChannel.isOpen()).willReturn(true);
+
+		given(mockConnectionFactory.newConnection(any(ExecutorService.class), anyString())).willReturn(mockConnection);
+		given(mockConnection.isOpen()).willReturn(true);
+		given(mockConnection.createChannel()).willReturn(mockChannel);
+		given(mockChannel.queueDeclarePassive(Address.AMQ_RABBITMQ_REPLY_TO))
+				.willReturn(new AMQImpl.Queue.DeclareOk(Address.AMQ_RABBITMQ_REPLY_TO, 0, 0));
+		SingleConnectionFactory connectionFactory = new SingleConnectionFactory(mockConnectionFactory);
+		connectionFactory.setExecutor(mock(ExecutorService.class));
+		RabbitTemplate template = new RabbitTemplate(connectionFactory);
+		template.setReplyTimeout(1);
+		template.convertSendAndReceive("foo");
+		assertThat(TestUtils.getPropertyValue(template, "evaluatedFastReplyTo", Boolean.class)).isTrue();
+		assertThat(TestUtils.getPropertyValue(template, "usingFastReplyTo", Boolean.class)).isTrue();
+	}
+
+	@Test
 	public void testRecovery() throws Exception {
 		ConnectionFactory mockConnectionFactory = mock(ConnectionFactory.class);
 		final AtomicInteger count = new AtomicInteger();
@@ -312,19 +386,19 @@ public class RabbitTemplateTests {
 			try {
 				template.convertAndSend("foo", "bar", "baz");
 			}
-			catch (Exception e) {
+			catch (@SuppressWarnings("unused") Exception e) {
 				//Ignore it. Doesn't matter for this test.
 			}
 			try {
 				template.receive("foo");
 			}
-			catch (Exception e) {
+			catch (@SuppressWarnings("unused") Exception e) {
 				//Ignore it. Doesn't matter for this test.
 			}
 			try {
 				template.receiveAndReply("foo", mock(ReceiveAndReplyCallback.class));
 			}
-			catch (Exception e) {
+			catch (@SuppressWarnings("unused") Exception e) {
 				//Ignore it. Doesn't matter for this test.
 			}
 		}
@@ -395,7 +469,7 @@ public class RabbitTemplateTests {
 			try {
 				shutdownLatch.await(10, TimeUnit.SECONDS);
 			}
-			catch (InterruptedException e) {
+			catch (@SuppressWarnings("unused") InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}
 			listener.get().shutdownCompleted(new ShutdownSignalException(true, false, null, null));
@@ -446,11 +520,64 @@ public class RabbitTemplateTests {
 		assertThat(afterReceivePostProcessors).containsExactly(mpp2, mpp3);
 	}
 
+	@Test
+	public void testPublisherConnWithInvoke() {
+		org.springframework.amqp.rabbit.connection.ConnectionFactory cf = mock(
+				org.springframework.amqp.rabbit.connection.ConnectionFactory.class);
+		org.springframework.amqp.rabbit.connection.ConnectionFactory pcf = mock(
+				org.springframework.amqp.rabbit.connection.ConnectionFactory.class);
+		given(cf.getPublisherConnectionFactory()).willReturn(pcf);
+		RabbitTemplate template = new RabbitTemplate(cf);
+		template.setUsePublisherConnection(true);
+		org.springframework.amqp.rabbit.connection.Connection conn = mock(
+				org.springframework.amqp.rabbit.connection.Connection.class);
+		Channel channel = mock(Channel.class);
+		given(pcf.createConnection()).willReturn(conn);
+		given(conn.isOpen()).willReturn(true);
+		given(conn.createChannel(false)).willReturn(channel);
+		template.invoke(t -> null);
+		verify(pcf).createConnection();
+		verify(conn).createChannel(false);
+	}
+
+	@Test
+	public void testPublisherConnWithInvokeInTx() {
+		org.springframework.amqp.rabbit.connection.ConnectionFactory cf = mock(
+				org.springframework.amqp.rabbit.connection.ConnectionFactory.class);
+		org.springframework.amqp.rabbit.connection.ConnectionFactory pcf = mock(
+				org.springframework.amqp.rabbit.connection.ConnectionFactory.class);
+		given(cf.getPublisherConnectionFactory()).willReturn(pcf);
+		RabbitTemplate template = new RabbitTemplate(cf);
+		template.setUsePublisherConnection(true);
+		template.setChannelTransacted(true);
+		org.springframework.amqp.rabbit.connection.Connection conn = mock(
+				org.springframework.amqp.rabbit.connection.Connection.class);
+		Channel channel = mock(Channel.class);
+		given(pcf.createConnection()).willReturn(conn);
+		given(conn.isOpen()).willReturn(true);
+		given(conn.createChannel(true)).willReturn(channel);
+		template.invoke(t -> null);
+		verify(pcf).createConnection();
+		verify(conn).createChannel(true);
+	}
+
+	@SuppressWarnings("deprecation")
+	@Test
+	public void testReturnsFallback() {
+		RabbitTemplate template = new RabbitTemplate();
+		AtomicBoolean called = new AtomicBoolean();
+		template.setReturnCallback((message, replyCode, replyText, exchange, routingKey) -> {
+			called.set(true);
+		});
+		ReturnsCallback cb = TestUtils.getPropertyValue(template, "returnsCallback", ReturnsCallback.class);
+		cb.returnedMessage(new ReturnedMessage(null, 0, null, null, null));
+		assertThat(called.get()).isTrue();
+	}
+
 	@SuppressWarnings("serial")
 	private class TestTransactionManager extends AbstractPlatformTransactionManager {
 
 		TestTransactionManager() {
-			super();
 		}
 
 		@Override

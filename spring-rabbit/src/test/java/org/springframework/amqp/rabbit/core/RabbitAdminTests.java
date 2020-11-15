@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,9 @@ package org.springframework.amqp.rabbit.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -31,8 +33,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyZeroInteractions;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -45,9 +46,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeoutException;
 
 import org.apache.commons.logging.Log;
-import org.junit.Ignore;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import org.springframework.amqp.UncategorizedAmqpException;
@@ -64,7 +63,9 @@ import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.Connection;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.connection.SingleConnectionFactory;
-import org.springframework.amqp.rabbit.junit.BrokerRunning;
+import org.springframework.amqp.rabbit.junit.LogLevels;
+import org.springframework.amqp.rabbit.junit.RabbitAvailable;
+import org.springframework.amqp.rabbit.junit.RabbitAvailableCondition;
 import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.beans.DirectFieldAccessor;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
@@ -77,6 +78,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Scope;
 import org.springframework.context.support.GenericApplicationContext;
+import org.springframework.retry.backoff.NoBackOffPolicy;
+import org.springframework.retry.support.RetryTemplate;
 
 import com.rabbitmq.client.AMQP.Queue.DeclareOk;
 import com.rabbitmq.client.Channel;
@@ -95,10 +98,8 @@ import com.rabbitmq.http.client.domain.QueueInfo;
  * @since 1.4.1
  *
  */
+@RabbitAvailable(management = true)
 public class RabbitAdminTests {
-
-	@Rule
-	public BrokerRunning brokerIsRunning = BrokerRunning.isBrokerAndManagementRunning();
 
 	@Test
 	public void testSettingOfNullConnectionFactory() {
@@ -148,19 +149,11 @@ public class RabbitAdminTests {
 		try {
 			rabbitAdmin.declareQueue(new Queue(queueName));
 			new RabbitTemplate(connectionFactory).convertAndSend(queueName, "foo");
-			int n = 0;
-			while (n++ < 100 && messageCount(rabbitAdmin, queueName) == 0) {
-				Thread.sleep(100);
-			}
-			assertThat(n < 100).as("Message count = 0").isTrue();
+			await("Message count = 0").until(() -> messageCount(rabbitAdmin, queueName) > 0);
 			Channel channel = connectionFactory.createConnection().createChannel(false);
 			DefaultConsumer consumer = new DefaultConsumer(channel);
 			channel.basicConsume(queueName, true, consumer);
-			n = 0;
-			while (n++ < 100 && messageCount(rabbitAdmin, queueName) > 0) {
-				Thread.sleep(100);
-			}
-			assertThat(n < 100).as("Message count > 0").isTrue();
+			await("Message count > 0").until(() -> messageCount(rabbitAdmin, queueName) == 0);
 			Properties props = rabbitAdmin.getQueueProperties(queueName);
 			assertThat(props.get(RabbitAdmin.QUEUE_CONSUMER_COUNT)).isNotNull();
 			assertThat(props.get(RabbitAdmin.QUEUE_CONSUMER_COUNT)).isEqualTo(1);
@@ -190,12 +183,12 @@ public class RabbitAdminTests {
 			queues.put("adQ", new Queue("testq.ad", true, false, true));
 			queues.put("exclQ", new Queue("testq.excl", true, true, false));
 			queues.put("allQ", new Queue("testq.all", false, true, true));
-			when(ctx.getBeansOfType(Queue.class)).thenReturn(queues);
+			given(ctx.getBeansOfType(Queue.class)).willReturn(queues);
 			Map<String, Exchange> exchanges = new HashMap<String, Exchange>();
 			exchanges.put("nonDurEx", new DirectExchange("testex.nonDur", false, false));
 			exchanges.put("adEx", new DirectExchange("testex.ad", true, true));
 			exchanges.put("allEx", new DirectExchange("testex.all", false, true));
-			when(ctx.getBeansOfType(Exchange.class)).thenReturn(exchanges);
+			given(ctx.getBeansOfType(Exchange.class)).willReturn(exchanges);
 			rabbitAdmin.setApplicationContext(ctx);
 			rabbitAdmin.afterPropertiesSet();
 			Log logger = spy(TestUtils.getPropertyValue(rabbitAdmin, "logger", Log.class));
@@ -232,6 +225,7 @@ public class RabbitAdminTests {
 	}
 
 	@Test
+	@LogLevels(classes = RabbitAdmin.class, level = "DEBUG")
 	public void testMultiEntities() {
 		ConfigurableApplicationContext ctx = new AnnotationConfigApplicationContext(Config.class);
 		RabbitTemplate template = ctx.getBean(RabbitTemplate.class);
@@ -253,6 +247,19 @@ public class RabbitAdminTests {
 		admin.deleteExchange("e3");
 		admin.deleteExchange("e4");
 		assertThat(admin.getQueueProperties(ctx.getBean(Config.class).prototypeQueueName)).isNull();
+		Declarables mixedDeclarables = ctx.getBean("ds", Declarables.class);
+		assertThat(mixedDeclarables.getDeclarablesByType(Queue.class))
+			.hasSize(1)
+			.extracting(Queue::getName)
+			.contains("q4");
+		assertThat(mixedDeclarables.getDeclarablesByType(Exchange.class))
+			.hasSize(1)
+			.extracting(Exchange::getName)
+			.contains("e4");
+		assertThat(mixedDeclarables.getDeclarablesByType(Binding.class))
+			.hasSize(1)
+			.extracting(Binding::getDestination)
+			.contains("q4");
 		ctx.close();
 	}
 
@@ -265,7 +272,7 @@ public class RabbitAdminTests {
 			admin.declareQueue(new Queue(longName));
 			fail("expected exception");
 		}
-		catch (Exception e) {
+		catch (@SuppressWarnings("unused") Exception e) {
 			// NOSONAR
 		}
 		String goodName = "foobar";
@@ -329,11 +336,10 @@ public class RabbitAdminTests {
 		verify(connection, times(1)).createChannel(false);
 		verify(channel1, times(4)).queueDeclare();
 		verify(channel1, times(1)).close();
-		verifyZeroInteractions(channel2);
+		verifyNoInteractions(channel2);
 	}
 
 	@Test
-	@Ignore // too long; not much value
 	public void testRetry() throws Exception {
 		com.rabbitmq.client.ConnectionFactory rabbitConnectionFactory = mock(com.rabbitmq.client.ConnectionFactory.class);
 		com.rabbitmq.client.Connection connection = mock(com.rabbitmq.client.Connection.class);
@@ -342,51 +348,41 @@ public class RabbitAdminTests {
 		given(connection.createChannel()).willReturn(channel);
 		given(channel.isOpen()).willReturn(true);
 		willThrow(new RuntimeException()).given(channel)
-			.queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), isNull());
+			.queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any());
 		CachingConnectionFactory ccf = new CachingConnectionFactory(rabbitConnectionFactory);
 		RabbitAdmin admin = new RabbitAdmin(ccf);
+		RetryTemplate rtt = new RetryTemplate();
+		rtt.setBackOffPolicy(new NoBackOffPolicy());
+		admin.setRetryTemplate(rtt);
 		GenericApplicationContext ctx = new GenericApplicationContext();
 		ctx.getBeanFactory().registerSingleton("foo", new AnonymousQueue());
 		ctx.getBeanFactory().registerSingleton("admin", admin);
 		admin.setApplicationContext(ctx);
 		ctx.getBeanFactory().initializeBean(admin, "admin");
 		ctx.refresh();
-		try {
-			ccf.createConnection();
-			fail("expected exception");
-		}
-		catch (UncategorizedAmqpException e) {
-			// NOSONAR
-		}
+		assertThatThrownBy(() -> ccf.createConnection())
+			.isInstanceOf(UncategorizedAmqpException.class);
 		ctx.close();
+		verify(channel, times(3)).queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any());
 	}
 
 	@Test
 	public void testMasterLocator() throws Exception {
-		CachingConnectionFactory cf = new CachingConnectionFactory(brokerIsRunning.getConnectionFactory());
+		CachingConnectionFactory cf = new CachingConnectionFactory(
+				RabbitAvailableCondition.getBrokerRunning().getConnectionFactory());
 		RabbitAdmin admin = new RabbitAdmin(cf);
 		AnonymousQueue queue = new AnonymousQueue();
 		admin.declareQueue(queue);
 		Client client = new Client("http://guest:guest@localhost:15672/api");
-		QueueInfo info = client.getQueue("?", queue.getName());
-		int n = 0;
-		while (n++ < 100 && info == null) {
-			Thread.sleep(100);
-			info = client.getQueue("/", queue.getName());
-		}
-		assertThat(info).isNotNull();
+		AnonymousQueue queue1 = queue;
+		QueueInfo info = await().until(() -> client.getQueue("/", queue1.getName()), inf -> inf != null);
 		assertThat(info.getArguments().get(Queue.X_QUEUE_MASTER_LOCATOR)).isEqualTo("client-local");
 
 		queue = new AnonymousQueue();
 		queue.setMasterLocator(null);
 		admin.declareQueue(queue);
-		info = client.getQueue("?", queue.getName());
-		n = 0;
-		while (n++ < 100 && info == null) {
-			Thread.sleep(100);
-			info = client.getQueue("/", queue.getName());
-		}
-		assertThat(info).isNotNull();
+		AnonymousQueue queue2 = queue;
+		info = await().until(() -> client.getQueue("/", queue2.getName()), inf -> inf != null);
 		assertThat(info.getArguments().get(Queue.X_QUEUE_MASTER_LOCATOR)).isNull();
 		cf.destroy();
 	}

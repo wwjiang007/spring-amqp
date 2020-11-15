@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-package org.springframework.amqp.rabbit.listener;
+package org.springframework.amqp.rabbit.listener.support;
 
 import org.apache.commons.logging.Log;
 
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.ImmediateRequeueAmqpException;
+import org.springframework.amqp.rabbit.listener.exception.MessageRejectedWhileStoppingException;
 
 /**
  * Utility methods for listener containers.
@@ -33,13 +34,13 @@ import org.springframework.amqp.ImmediateRequeueAmqpException;
 public final class ContainerUtils {
 
 	private ContainerUtils() {
-		super();
 	}
 
 	/**
 	 * Determine whether a message should be requeued; returns true if the throwable is a
 	 * {@link MessageRejectedWhileStoppingException} or defaultRequeueRejected is true and
-	 * there is not an {@link AmqpRejectAndDontRequeueException} in the cause chain.
+	 * there is not an {@link AmqpRejectAndDontRequeueException} in the cause chain or if
+	 * there is an {@link ImmediateRequeueAmqpException} in the cause chain.
 	 * @param defaultRequeueRejected the default requeue rejected.
 	 * @param throwable the throwable.
 	 * @param logger the logger to use for debug.
@@ -47,12 +48,16 @@ public final class ContainerUtils {
 	 */
 	public static boolean shouldRequeue(boolean defaultRequeueRejected, Throwable throwable, Log logger) {
 		boolean shouldRequeue = defaultRequeueRejected ||
-				throwable instanceof MessageRejectedWhileStoppingException ||
-				throwable instanceof ImmediateRequeueAmqpException;
+				throwable instanceof MessageRejectedWhileStoppingException;
 		Throwable t = throwable;
-		while (shouldRequeue && t != null) {
+		while (t != null) {
 			if (t instanceof AmqpRejectAndDontRequeueException) {
 				shouldRequeue = false;
+				break;
+			}
+			else if (t instanceof ImmediateRequeueAmqpException) {
+				shouldRequeue = true;
+				break;
 			}
 			t = t.getCause();
 		}
@@ -60,6 +65,18 @@ public final class ContainerUtils {
 			logger.debug("Rejecting messages (requeue=" + shouldRequeue + ")");
 		}
 		return shouldRequeue;
+	}
+
+	/**
+	 * Return true for {@link AmqpRejectAndDontRequeueException#isRejectManual()}.
+	 * @param ex the exception.
+	 * @return the exception's rejectManual property, if it's an
+	 * {@link AmqpRejectAndDontRequeueException}.
+	 * @since 2.2
+	 */
+	public static boolean isRejectManual(Throwable ex) {
+		return ex instanceof AmqpRejectAndDontRequeueException
+				&& ((AmqpRejectAndDontRequeueException) ex).isRejectManual();
 	}
 
 }

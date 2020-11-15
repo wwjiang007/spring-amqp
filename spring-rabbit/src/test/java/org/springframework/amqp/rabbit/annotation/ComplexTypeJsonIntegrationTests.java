@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,15 +17,11 @@
 package org.springframework.amqp.rabbit.annotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import java.util.concurrent.TimeUnit;
 
-import org.apache.logging.log4j.Level;
-import org.junit.AfterClass;
-import org.junit.ClassRule;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.rabbit.AsyncRabbitTemplate;
 import org.springframework.amqp.rabbit.AsyncRabbitTemplate.RabbitConverterFuture;
@@ -33,10 +29,10 @@ import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFacto
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.junit.BrokerRunning;
+import org.springframework.amqp.rabbit.junit.LogLevels;
+import org.springframework.amqp.rabbit.junit.RabbitAvailable;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.adapter.MessagingMessageListenerAdapter;
-import org.springframework.amqp.rabbit.test.LogLevelAdjuster;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,39 +40,30 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
 /**
  * @author Gary Russell
  * @since 2.0
  *
  */
-@RunWith(SpringRunner.class)
+@SpringJUnitConfig
 @DirtiesContext
+@RabbitAvailable(queues = { ComplexTypeJsonIntegrationTests.TEST_QUEUE, ComplexTypeJsonIntegrationTests.TEST_QUEUE2 })
+@LogLevels(classes = { RabbitTemplate.class,
+		MessagingMessageListenerAdapter.class,
+		SimpleMessageListenerContainer.class })
 public class ComplexTypeJsonIntegrationTests {
 
-	private static final String TEST_QUEUE = "test.complex.send.and.receive";
+	public static final String TEST_QUEUE = "test.complex.send.and.receive";
 
-	private static final String TEST_QUEUE2 = "test.complex.receive";
-
-	@ClassRule
-	public static BrokerRunning brokerRunning = BrokerRunning.isRunningWithEmptyQueues(TEST_QUEUE, TEST_QUEUE2);
-
-	@Rule
-	public LogLevelAdjuster adjuster = new LogLevelAdjuster(Level.DEBUG, RabbitTemplate.class,
-			MessagingMessageListenerAdapter.class,
-			SimpleMessageListenerContainer.class);
+	public static final String TEST_QUEUE2 = "test.complex.receive";
 
 	@Autowired
 	private RabbitTemplate rabbitTemplate;
 
 	@Autowired
 	private AsyncRabbitTemplate asyncTemplate;
-
-	@AfterClass
-	public static void tearDown() {
-		brokerRunning.removeTestQueues();
-	}
 
 	private static Foo<Bar<Baz, Qux>> makeAFoo() {
 		Foo<Bar<Baz, Qux>> foo = new Foo<>();
@@ -125,13 +112,9 @@ public class ComplexTypeJsonIntegrationTests {
 			m.getMessageProperties().getHeaders().remove("__TypeId__");
 			return m;
 		});
-		Foo<Bar<Baz, Qux>> foo =
-				this.rabbitTemplate.receiveAndConvert(new ParameterizedTypeReference<Foo<Bar<Baz, Qux>>>() { });
-		int n = 0;
-		while (n++ < 100 && foo == null) {
-			Thread.sleep(100);
-			foo = this.rabbitTemplate.receiveAndConvert(new ParameterizedTypeReference<Foo<Bar<Baz, Qux>>>() { });
-		}
+		Foo<Bar<Baz, Qux>> foo = await().until(
+				() -> this.rabbitTemplate.receiveAndConvert(new ParameterizedTypeReference<Foo<Bar<Baz, Qux>>>() { }),
+				msg -> msg != null);
 		verifyFooBarBazQux(foo);
 	}
 
@@ -272,7 +255,6 @@ public class ComplexTypeJsonIntegrationTests {
 		private String baz;
 
 		Baz() {
-			super();
 		}
 
 		public Baz(String string) {
@@ -299,7 +281,6 @@ public class ComplexTypeJsonIntegrationTests {
 		private Integer qux;
 
 		Qux() {
-			super();
 		}
 
 		public Qux(int i) {

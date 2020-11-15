@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.concurrent.Executor;
 
 import org.aopalliance.aop.Advice;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.MessagePostProcessor;
@@ -88,7 +88,7 @@ public class RabbitListenerContainerFactoryTests {
 		setBasicConfig(this.factory);
 		this.factory.setTaskExecutor(executor);
 		this.factory.setTransactionManager(transactionManager);
-		this.factory.setTxSize(10);
+		this.factory.setBatchSize(10);
 		this.factory.setConcurrentConsumers(2);
 		this.factory.setMaxConcurrentConsumers(5);
 		this.factory.setStartConsumerMinInterval(2000L);
@@ -103,7 +103,7 @@ public class RabbitListenerContainerFactoryTests {
 		this.factory.setRecoveryBackOff(recoveryBackOff);
 		this.factory.setMissingQueuesFatal(true);
 		this.factory.setAfterReceivePostProcessors(afterReceivePostProcessor);
-		this.factory.setContainerConfigurer(c -> c.setShutdownTimeout(10_000));
+		this.factory.setContainerCustomizer(c -> c.setShutdownTimeout(10_000));
 
 		assertThat(this.factory.getAdviceChain()).isEqualTo(new Advice[]{advice});
 
@@ -117,7 +117,7 @@ public class RabbitListenerContainerFactoryTests {
 		DirectFieldAccessor fieldAccessor = new DirectFieldAccessor(container);
 		assertThat(fieldAccessor.getPropertyValue("taskExecutor")).isSameAs(executor);
 		assertThat(fieldAccessor.getPropertyValue("transactionManager")).isSameAs(transactionManager);
-		assertThat(fieldAccessor.getPropertyValue("txSize")).isEqualTo(10);
+		assertThat(fieldAccessor.getPropertyValue("batchSize")).isEqualTo(10);
 		assertThat(fieldAccessor.getPropertyValue("concurrentConsumers")).isEqualTo(2);
 		assertThat(fieldAccessor.getPropertyValue("maxConcurrentConsumers")).isEqualTo(5);
 		assertThat(fieldAccessor.getPropertyValue("startConsumerMinInterval")).isEqualTo(2000L);

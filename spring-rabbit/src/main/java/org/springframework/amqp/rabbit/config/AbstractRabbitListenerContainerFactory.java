@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 the original author or authors.
+ * Copyright 2014-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ package org.springframework.amqp.rabbit.config;
 import java.util.Arrays;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 
 import org.aopalliance.aop.Advice;
 import org.apache.commons.logging.Log;
@@ -46,6 +45,7 @@ import org.springframework.lang.Nullable;
 import org.springframework.retry.RecoveryCallback;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.util.Assert;
 import org.springframework.util.ErrorHandler;
 import org.springframework.util.backoff.BackOff;
 import org.springframework.util.backoff.FixedBackOff;
@@ -118,11 +118,13 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	private RecoveryCallback<?> recoveryCallback;
 
-	private Consumer<C> containerConfigurer;
+	private ContainerCustomizer<C> containerCustomizer;
 
 	private boolean batchListener;
 
 	private BatchingStrategy batchingStrategy;
+
+	private Boolean deBatchingEnabled;
 
 	/**
 	 * @param connectionFactory The connection factory.
@@ -295,23 +297,27 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 
 	/**
 	 * Set post processors which will be applied after the Message is received.
-	 * @param afterReceivePostProcessors the post processors.
+	 * @param postProcessors the post processors.
 	 * @since 2.0
 	 * @see AbstractMessageListenerContainer#setAfterReceivePostProcessors(MessagePostProcessor...)
 	 */
-	public void setAfterReceivePostProcessors(MessagePostProcessor... afterReceivePostProcessors) {
-		this.afterReceivePostProcessors = afterReceivePostProcessors;
+	public void setAfterReceivePostProcessors(MessagePostProcessor... postProcessors) {
+		Assert.notNull(postProcessors, "'postProcessors' cannot be null");
+		Assert.noNullElements(postProcessors, "'postProcessors' cannot have null elements");
+		this.afterReceivePostProcessors = Arrays.copyOf(postProcessors, postProcessors.length);
 	}
 
 	/**
 	 * Set post processors that will be applied before sending replies; added to each
 	 * message listener adapter.
-	 * @param beforeSendReplyPostProcessors the post processors.
+	 * @param postProcessors the post processors.
 	 * @since 2.0.3
 	 * @see AbstractAdaptableMessageListener#setBeforeSendReplyPostProcessors(MessagePostProcessor...)
 	 */
-	public void setBeforeSendReplyPostProcessors(MessagePostProcessor... beforeSendReplyPostProcessors) {
-		this.beforeSendReplyPostProcessors = beforeSendReplyPostProcessors;
+	public void setBeforeSendReplyPostProcessors(MessagePostProcessor... postProcessors) {
+		Assert.notNull(postProcessors, "'postProcessors' cannot be null");
+		Assert.noNullElements(postProcessors, "'postProcessors' cannot have null elements");
+		this.beforeSendReplyPostProcessors = Arrays.copyOf(postProcessors, postProcessors.length);
 	}
 
 	/**
@@ -340,13 +346,13 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 	}
 
 	/**
-	 * A {@link Consumer} that is invoked to enable setting other container properties not
-	 * exposed  by this container factory.
-	 * @param configurer the configurer;
-	 * @since 2.1.1
+	 * Set a {@link ContainerCustomizer} that is invoked after a container is created and
+	 * configured to enable further customization of the container.
+	 * @param containerCustomizer the customizer.
+	 * @since 2.2.2
 	 */
-	public void setContainerConfigurer(Consumer<C> configurer) {
-		this.containerConfigurer = configurer;
+	public void setContainerCustomizer(ContainerCustomizer<C> containerCustomizer) {
+		this.containerCustomizer = containerCustomizer;
 	}
 
 	/**
@@ -370,6 +376,17 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 		this.batchingStrategy = batchingStrategy;
 	}
 
+	/**
+	 * Determine whether or not the container should de-batch batched
+	 * messages (true) or call the listener with the batch (false). Default: true.
+	 * @param deBatchingEnabled whether or not to disable de-batching of messages.
+	 * @since 2.2
+	 * @see AbstractMessageListenerContainer#setDeBatchingEnabled(boolean)
+	 */
+	public void setDeBatchingEnabled(final Boolean deBatchingEnabled) {
+		this.deBatchingEnabled = deBatchingEnabled;
+	}
+
 	@Override
 	public C createListenerContainer(RabbitListenerEndpoint endpoint) {
 		C instance = createContainerInstance();
@@ -378,7 +395,7 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 				JavaUtils.INSTANCE
 						.acceptIfNotNull(this.connectionFactory, instance::setConnectionFactory)
 						.acceptIfNotNull(this.errorHandler, instance::setErrorHandler);
-		if (this.messageConverter != null && endpoint != null) {
+		if (this.messageConverter != null && endpoint != null && endpoint.getMessageConverter() == null) {
 			endpoint.setMessageConverter(this.messageConverter);
 		}
 		javaUtils
@@ -399,8 +416,12 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 			.acceptIfNotNull(this.applicationEventPublisher, instance::setApplicationEventPublisher)
 			.acceptIfNotNull(this.autoStartup, instance::setAutoStartup)
 			.acceptIfNotNull(this.phase, instance::setPhase)
-			.acceptIfNotNull(this.afterReceivePostProcessors, instance::setAfterReceivePostProcessors);
-		instance.setDeBatchingEnabled(!this.batchListener);
+			.acceptIfNotNull(this.afterReceivePostProcessors, instance::setAfterReceivePostProcessors)
+			.acceptIfNotNull(this.deBatchingEnabled, instance::setDeBatchingEnabled);
+		if (this.batchListener && this.deBatchingEnabled == null) {
+			// turn off container debatching by default for batch listeners
+			instance.setDeBatchingEnabled(false);
+		}
 		if (endpoint != null) { // endpoint settings overriding default factory settings
 			javaUtils
 				.acceptIfNotNull(endpoint.getAutoStartup(), instance::setAutoStartup)
@@ -420,13 +441,16 @@ public abstract class AbstractRabbitListenerContainerFactory<C extends AbstractM
 							messageListener::setBeforeSendReplyPostProcessors)
 					.acceptIfNotNull(this.retryTemplate, messageListener::setRetryTemplate)
 					.acceptIfCondition(this.retryTemplate != null && this.recoveryCallback != null,
-							this.recoveryCallback,
-							messageListener::setRecoveryCallback);
+							this.recoveryCallback, messageListener::setRecoveryCallback)
+					.acceptIfNotNull(this.defaultRequeueRejected, messageListener::setDefaultRequeueRejected)
+					.acceptIfNotNull(endpoint.getReplyPostProcessor(), messageListener::setReplyPostProcessor)
+					.acceptIfNotNull(endpoint.getReplyContentType(), messageListener::setReplyContentType);
+			messageListener.setConverterWinsContentType(endpoint.isConverterWinsContentType());
 		}
 		initializeContainer(instance, endpoint);
 
-		if (this.containerConfigurer != null) {
-			this.containerConfigurer.accept(instance);
+		if (this.containerCustomizer != null) {
+			this.containerCustomizer.configure(instance);
 		}
 
 		return instance;

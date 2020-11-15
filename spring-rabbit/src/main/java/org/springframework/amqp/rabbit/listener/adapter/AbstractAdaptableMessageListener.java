@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 the original author or authors.
+ * Copyright 2014-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
+import org.springframework.amqp.rabbit.listener.support.ContainerUtils;
 import org.springframework.amqp.rabbit.support.DefaultMessagePropertiesConverter;
 import org.springframework.amqp.rabbit.support.MessagePropertiesConverter;
 import org.springframework.amqp.rabbit.support.RabbitExceptionTranslator;
@@ -64,6 +65,7 @@ import reactor.core.publisher.Mono;
  * @author Stephane Nicoll
  * @author Gary Russell
  * @author Artem Bilan
+ * @author Johan Haleby
  *
  * @since 1.4
  *
@@ -80,9 +82,11 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 	private static final ParserContext PARSER_CONTEXT = new TemplateParserContext("!{", "}");
 
 	private static final boolean monoPresent = // NOSONAR - lower case
-			ClassUtils.isPresent("reactor.core.publisher.Mono", ChannelAwareMessageListener.class.getClassLoader());;
+			ClassUtils.isPresent("reactor.core.publisher.Mono", ChannelAwareMessageListener.class.getClassLoader());
 
-	/** Logger available to subclasses. */
+	/**
+	 * Logger available to subclasses.
+	 */
 	protected final Log logger = LogFactory.getLog(getClass()); // NOSONAR protected
 
 	private final StandardEvaluationContext evalContext = new StandardEvaluationContext();
@@ -95,7 +99,7 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 
 	private Expression responseExpression;
 
-	private volatile boolean mandatoryPublish;
+	private boolean mandatoryPublish;
 
 	private MessageConverter messageConverter = new SimpleMessageConverter();
 
@@ -111,6 +115,13 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 
 	private boolean isManualAck;
 
+	private boolean defaultRequeueRejected = true;
+
+	private ReplyPostProcessor replyPostProcessor;
+
+	private String replyContentType;
+
+	private boolean converterWinsContentType = true;
 
 	/**
 	 * Set the routing key to use when sending response messages.
@@ -238,12 +249,69 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 	}
 
 	/**
+	 * Set a {@link ReplyPostProcessor} to post process a response message before it is
+	 * sent. It is called after {@link #postProcessResponse(Message, Message)} which sets
+	 * up the correlationId header.
+	 * @param replyPostProcessor the post processor.
+	 * @since 2.2.5
+	 */
+	public void setReplyPostProcessor(ReplyPostProcessor replyPostProcessor) {
+		this.replyPostProcessor = replyPostProcessor;
+	}
+
+	/**
+	 * Get the reply content type.
+	 * @return the content type.
+	 * @since 2.3
+	 */
+	protected String getReplyContentType() {
+		return this.replyContentType;
+	}
+
+	/**
+	 * Set the reply content type.
+	 * @param replyContentType the content type.
+	 * @since 2.3
+	 */
+	public void setReplyContentType(String replyContentType) {
+		this.replyContentType = replyContentType;
+	}
+
+	/**
+	 * Return whether the content type set by a converter prevails or not.
+	 * @return false to always apply the reply content type.
+	 * @since 2.3
+	 */
+	protected boolean isConverterWinsContentType() {
+		return this.converterWinsContentType;
+	}
+
+	/**
+	 * Set whether the content type set by a converter prevails or not.
+	 * @param converterWinsContentType false to always apply the reply content type.
+	 * @since 2.3
+	 */
+	public void setConverterWinsContentType(boolean converterWinsContentType) {
+		this.converterWinsContentType = converterWinsContentType;
+	}
+
+	/**
 	 * Return the converter that will convert incoming Rabbit messages to listener method arguments, and objects
 	 * returned from listener methods back to Rabbit messages.
 	 * @return The message converter.
 	 */
 	protected MessageConverter getMessageConverter() {
 		return this.messageConverter;
+	}
+
+	/**
+	 * Set to the value of this listener's container equivalent property. Used when
+	 * rejecting from an async listener.
+	 * @param defaultRequeueRejected false to not requeue.
+	 * @since 2.1.8
+	 */
+	public void setDefaultRequeueRejected(boolean defaultRequeueRejected) {
+		this.defaultRequeueRejected = defaultRequeueRejected;
 	}
 
 	@Override
@@ -312,7 +380,10 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 							+ "otherwise the container will ack the message immediately");
 				}
 				((ListenableFuture<?>) resultArg.getReturnValue()).addCallback(
-						r -> asyncSuccess(resultArg, request, channel, source, r),
+						r -> {
+							asyncSuccess(resultArg, request, channel, source, r);
+							basicAck(request, channel);
+						},
 						t -> asyncFailure(request, channel, t));
 			}
 			else if (monoPresent && MonoHandler.isMono(resultArg.getReturnValue())) {
@@ -322,7 +393,8 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 				}
 				MonoHandler.subscribe(resultArg.getReturnValue(),
 						r -> asyncSuccess(resultArg, request, channel, source, r),
-						t -> asyncFailure(request, channel, t));
+						t -> asyncFailure(request, channel, t),
+						() -> basicAck(request, channel));
 			}
 			else {
 				doHandleResult(resultArg, request, channel, source);
@@ -334,14 +406,36 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 		}
 	}
 
-	private void asyncSuccess(InvocationResult resultArg, Message request, Channel channel, Object source, Object r) {
-		// We only get here with Mono<?> and ListenableFuture<?> which have exactly one type argument
-		Type returnType = ((ParameterizedType) resultArg.getReturnType()).getActualTypeArguments()[0]; // NOSONAR
-		if (returnType instanceof WildcardType) {
-			// Set the return type to null so the converter will use the actual returned object's class for type info
-			returnType = null;
+	private void asyncSuccess(InvocationResult resultArg, Message request, Channel channel, Object source,
+			Object deferredResult) {
+
+		if (deferredResult == null) {
+			if (this.logger.isDebugEnabled()) {
+				this.logger.debug("Async result is null, ignoring");
+			}
 		}
-		doHandleResult(new InvocationResult(r, resultArg.getSendTo(), returnType), request, channel, source);
+		else {
+			// We only get here with Mono<?> and ListenableFuture<?> which have exactly one type argument
+			Type returnType = resultArg.getReturnType();
+			if (returnType != null) {
+				Type[] actualTypeArguments = ((ParameterizedType) returnType).getActualTypeArguments();
+				if (actualTypeArguments.length > 0) {
+					returnType = actualTypeArguments[0]; // NOSONAR
+					if (returnType instanceof WildcardType) {
+						// Set the return type to null so the converter will use the actual returned
+						// object's class for type info
+						returnType = null;
+					}
+				}
+			}
+			doHandleResult(
+					new InvocationResult(deferredResult, resultArg.getSendTo(), returnType, resultArg.getBean(),
+							resultArg.getMethod()),
+					request, channel, source);
+		}
+	}
+
+	private void basicAck(Message request, Channel channel) {
 		try {
 			channel.basicAck(request.getMessageProperties().getDeliveryTag(), false);
 		}
@@ -353,7 +447,8 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 	private void asyncFailure(Message request, Channel channel, Throwable t) {
 		this.logger.error("Future or Mono was completed with an exception for " + request, t);
 		try {
-			channel.basicNack(request.getMessageProperties().getDeliveryTag(), false, true);
+			channel.basicNack(request.getMessageProperties().getDeliveryTag(), false,
+					ContainerUtils.shouldRequeue(this.defaultRequeueRejected, t, this.logger));
 		}
 		catch (IOException e) {
 			this.logger.error("Failed to nack message", e);
@@ -367,7 +462,13 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 		}
 		try {
 			Message response = buildMessage(channel, resultArg.getReturnValue(), resultArg.getReturnType());
+			MessageProperties props = response.getMessageProperties();
+			props.setTargetBean(resultArg.getBean());
+			props.setTargetMethod(resultArg.getMethod());
 			postProcessResponse(request, response);
+			if (this.replyPostProcessor != null) {
+				response = this.replyPostProcessor.apply(request, response);
+			}
 			Address replyTo = getReplyToAddress(request, source, resultArg);
 			sendResponse(channel, replyTo, response);
 		}
@@ -391,7 +492,7 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 	protected Message buildMessage(Channel channel, Object result, Type genericType) {
 		MessageConverter converter = getMessageConverter();
 		if (converter != null && !(result instanceof Message)) {
-			return converter.toMessage(result, new MessageProperties(), genericType);
+			return convert(result, genericType, converter);
 		}
 		else {
 			if (!(result instanceof Message)) {
@@ -400,6 +501,26 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 			}
 			return (Message) result;
 		}
+	}
+
+	/**
+	 * Convert to a message, with reply content type based on settings.
+	 * @param result the result.
+	 * @param genericType the type.
+	 * @param converter the converter.
+	 * @return the message.
+	 * @since 2.3
+	 */
+	protected Message convert(Object result, Type genericType, MessageConverter converter) {
+		MessageProperties messageProperties = new MessageProperties();
+		if (this.replyContentType != null) {
+			messageProperties.setContentType(this.replyContentType);
+		}
+		Message message = converter.toMessage(result, messageProperties, genericType);
+		if (this.replyContentType != null && !this.converterWinsContentType) {
+			message.getMessageProperties().setContentType(this.replyContentType);
+		}
+		return message;
 	}
 
 	/**
@@ -465,7 +586,7 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 	}
 
 	private Address evaluateReplyTo(Message request, Object source, Object result, Expression expression) {
-		Address replyTo = null;
+		Address replyTo;
 		Object value = expression.getValue(this.evalContext, new ReplyExpressionRoot(request, source, result));
 		Assert.state(value instanceof String || value instanceof Address,
 				"response expression must evaluate to a String or Address");
@@ -484,6 +605,7 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 	 * @param replyTo the Rabbit ReplyTo string to use when sending. Currently interpreted to be the routing key.
 	 * @param messageIn the Rabbit message to send
 	 * @see #postProcessResponse(Message, Message)
+	 * @see #setReplyPostProcessor(ReplyPostProcessor)
 	 */
 	protected void sendResponse(Channel channel, Address replyTo, Message messageIn) {
 		Message message = messageIn;
@@ -571,7 +693,7 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 
 	}
 
-	private static class MonoHandler {
+	private static class MonoHandler { // NOSONAR - pointless to name it ..Utils|Helper
 
 		static boolean isMono(Object result) {
 			return result instanceof Mono;
@@ -579,9 +701,9 @@ public abstract class AbstractAdaptableMessageListener implements ChannelAwareMe
 
 		@SuppressWarnings("unchecked")
 		static void subscribe(Object returnValue, Consumer<? super Object> success,
-				Consumer<? super Throwable> failure) {
+				Consumer<? super Throwable> failure, Runnable completeConsumer) {
 
-			((Mono<? super Object>) returnValue).subscribe(success, failure);
+			((Mono<? super Object>) returnValue).subscribe(success, failure, completeConsumer);
 		}
 
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -74,6 +74,10 @@ public final class RabbitNamespaceUtils {
 
 	private static final String TRANSACTION_SIZE_ATTRIBUTE = "transaction-size";
 
+	private static final String CONSUMER_BATCH_ENABLED_ATTRIBUTE = "consumer-batch-enabled";
+
+	private static final String BATCH_SIZE_ATTRIBUTE = "batch-size";
+
 	private static final String PHASE_ATTRIBUTE = "phase";
 
 	private static final String AUTO_STARTUP_ATTRIBUTE = "auto-startup";
@@ -116,10 +120,10 @@ public final class RabbitNamespaceUtils {
 
 
 	private RabbitNamespaceUtils() {
-		super();
 	}
 
-	public static BeanDefinition parseContainer(Element containerEle, ParserContext parserContext) { // NOSONAR complexity
+	public static BeanDefinition parseContainer(Element containerEle, ParserContext parserContext) { // NOSONAR
+		// complexity
 		RootBeanDefinition containerDef = new RootBeanDefinition(ListenerContainerFactoryBean.class);
 		containerDef.setSource(parserContext.extractSource(containerEle));
 
@@ -135,7 +139,13 @@ public final class RabbitNamespaceUtils {
 			containerDef.getPropertyValues().add("connectionFactory",
 					new RuntimeBeanReference(connectionFactoryBeanName));
 		}
-		containerDef.getPropertyValues().add("type", new TypedStringValue(containerEle.getAttribute(TYPE)));
+
+		if (containerEle.hasAttribute(TYPE)) {
+			String type = containerEle.getAttribute(TYPE);
+			if (StringUtils.hasText(type)) {
+				containerDef.getPropertyValues().add("type", new TypedStringValue(type));
+			}
+		}
 
 		String taskExecutorBeanName = containerEle.getAttribute(TASK_EXECUTOR_ATTRIBUTE);
 		if (StringUtils.hasText(taskExecutorBeanName)) {
@@ -210,9 +220,23 @@ public final class RabbitNamespaceUtils {
 			containerDef.getPropertyValues().add("channelTransacted", new TypedStringValue(channelTransacted));
 		}
 
+		String consumerBatch = containerEle.getAttribute(CONSUMER_BATCH_ENABLED_ATTRIBUTE);
+		if (StringUtils.hasText(consumerBatch)) {
+			containerDef.getPropertyValues().add("consumerBatchEnabled", new TypedStringValue(consumerBatch));
+		}
+
+		String batchSize = containerEle.getAttribute(BATCH_SIZE_ATTRIBUTE);
+		if (StringUtils.hasText(batchSize)) {
+			containerDef.getPropertyValues().add("batchSize", new TypedStringValue(batchSize));
+		}
+
 		String transactionSize = containerEle.getAttribute(TRANSACTION_SIZE_ATTRIBUTE);
 		if (StringUtils.hasText(transactionSize)) {
-			containerDef.getPropertyValues().add("txSize", new TypedStringValue(transactionSize));
+			if (StringUtils.hasText(batchSize)) {
+				parserContext.getReaderContext().error(
+						"Listener Container - cannot have both 'batch-size' and 'transaction-size'", containerEle);
+			}
+			containerDef.getPropertyValues().add("batchSize", new TypedStringValue(transactionSize));
 		}
 
 		String requeueRejected = containerEle.getAttribute(REQUEUE_REJECTED_ATTRIBUTE);
@@ -241,7 +265,7 @@ public final class RabbitNamespaceUtils {
 			if (StringUtils.hasText(recoveryBackOff)) {
 				parserContext.getReaderContext()
 						.error("'" + RECOVERY_INTERVAL + "' and '" + RECOVERY_BACK_OFF + "' are mutually exclusive",
-						containerEle);
+								containerEle);
 			}
 			containerDef.getPropertyValues().add("recoveryInterval", new TypedStringValue(recoveryInterval));
 		}
@@ -284,7 +308,7 @@ public final class RabbitNamespaceUtils {
 		String retryDeclarationInterval = containerEle.getAttribute(MISSING_QUEUE_RETRY_INTERVAL);
 		if (StringUtils.hasText(retryDeclarationInterval)) {
 			containerDef.getPropertyValues().add("retryDeclarationInterval",
-			new TypedStringValue(retryDeclarationInterval));
+					new TypedStringValue(retryDeclarationInterval));
 		}
 
 		String consumerTagStrategy = containerEle.getAttribute(CONSUMER_TAG_STRATEGY);

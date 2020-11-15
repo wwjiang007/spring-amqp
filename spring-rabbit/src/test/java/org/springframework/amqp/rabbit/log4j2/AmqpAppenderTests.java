@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.springframework.amqp.rabbit.log4j2;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -29,15 +30,15 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.core.LoggerContext;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.ClassRule;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.FanoutExchange;
@@ -46,12 +47,19 @@ import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.RabbitConnectionFactoryBean;
+import org.springframework.amqp.rabbit.connection.RabbitUtils;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.junit.BrokerRunning;
+import org.springframework.amqp.rabbit.junit.RabbitAvailable;
+import org.springframework.amqp.rabbit.junit.RabbitAvailableCondition;
 import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.util.ReflectionTestUtils;
+
+import com.rabbitmq.client.ConnectionFactory;
+import com.rabbitmq.client.DefaultSaslConfig;
+import com.rabbitmq.client.JDKSaslConfig;
+import com.rabbitmq.client.impl.CRDemoMechanism;
 
 /**
  * @author Gary Russell
@@ -59,30 +67,29 @@ import org.springframework.test.util.ReflectionTestUtils;
  * @author Artem Bilan
  * @author Dominique Villard
  * @author Nicolas Ristock
+ * @author Eugene Gusev
  *
  * @since 1.6
  */
+@RabbitAvailable
 public class AmqpAppenderTests {
-
-	@ClassRule
-	public static BrokerRunning brokerRunning = BrokerRunning.isRunning();
 
 	private static final LoggerContext LOGGER_CONTEXT = (LoggerContext) LogManager.getContext(false);
 
 	private static final URI ORIGINAL_LOGGER_CONFIG = LOGGER_CONTEXT.getConfigLocation();
 
-	@BeforeClass
+	@BeforeAll
 	public static void setup() throws IOException {
 		LOGGER_CONTEXT.setConfigLocation(new ClassPathResource("log4j2-amqp-appender.xml").getURI());
 		LOGGER_CONTEXT.reconfigure();
 	}
 
-	@AfterClass
+	@AfterAll
 	public static void teardown() {
 		LOGGER_CONTEXT.setConfigLocation(ORIGINAL_LOGGER_CONFIG);
 		LOGGER_CONTEXT.reconfigure();
-		brokerRunning.deleteQueues("log4jTest", "log4j2Test");
-		brokerRunning.deleteExchanges("log4j2Test", "log4j2Test_uri");
+		RabbitAvailableCondition.getBrokerRunning().deleteQueues("log4jTest", "log4j2Test");
+		RabbitAvailableCondition.getBrokerRunning().deleteExchanges("log4j2Test", "log4j2Test_uri");
 	}
 
 	@Test
@@ -112,6 +119,7 @@ public class AmqpAppenderTests {
 		assertThat(threadName).isNotNull();
 		assertThat(threadName).isInstanceOf(String.class);
 		assertThat(threadName).isEqualTo(Thread.currentThread().getName());
+		ccf.destroy();
 	}
 
 	@Test
@@ -154,6 +162,8 @@ public class AmqpAppenderTests {
 		assertThat(TestUtils.getPropertyValue(manager, "maxSenderRetries")).isEqualTo(5);
 		// change the property to true and this fails and test() randomly fails too.
 		assertThat(TestUtils.getPropertyValue(manager, "async", Boolean.class)).isFalse();
+		// default value
+		assertThat(TestUtils.getPropertyValue(manager, "addMdcAsHeaders", Boolean.class)).isTrue();
 
 		assertThat(TestUtils.getPropertyValue(appender, "events.items", Object[].class).length).isEqualTo(10);
 
@@ -162,13 +172,47 @@ public class AmqpAppenderTests {
 	}
 
 	@Test
-	public void testAmqpAppenderEventQueueTypeDefaultsToLinkedBlockingQueue() {
+	public void testSaslConfig() {
+		Logger logger = LogManager.getLogger("sasl");
+		AmqpAppender appender = (AmqpAppender) TestUtils.getPropertyValue(logger, "context.configuration.appenders",
+				Map.class).get("sasl1");
+		assertThat(RabbitUtils.stringToSaslConfig(TestUtils.getPropertyValue(appender, "manager.saslConfig",
+				String.class), mock(ConnectionFactory.class)))
+			.isInstanceOf(DefaultSaslConfig.class)
+			.hasFieldOrPropertyWithValue("mechanism", "PLAIN");
+		appender = (AmqpAppender) TestUtils.getPropertyValue(logger, "context.configuration.appenders",
+				Map.class).get("sasl2");
+		assertThat(RabbitUtils.stringToSaslConfig(TestUtils.getPropertyValue(appender, "manager.saslConfig",
+				String.class), mock(ConnectionFactory.class)))
+			.isInstanceOf(DefaultSaslConfig.class)
+			.hasFieldOrPropertyWithValue("mechanism", "EXTERNAL");
+		appender = (AmqpAppender) TestUtils.getPropertyValue(logger, "context.configuration.appenders",
+				Map.class).get("sasl3");
+		assertThat(RabbitUtils.stringToSaslConfig(TestUtils.getPropertyValue(appender, "manager.saslConfig",
+				String.class), mock(ConnectionFactory.class)))
+			.isInstanceOf(JDKSaslConfig.class);
+		appender = (AmqpAppender) TestUtils.getPropertyValue(logger, "context.configuration.appenders",
+				Map.class).get("sasl4");
+		assertThat(RabbitUtils.stringToSaslConfig(TestUtils.getPropertyValue(appender, "manager.saslConfig",
+				String.class), mock(ConnectionFactory.class)))
+			.isInstanceOf(CRDemoMechanism.CRDemoSaslConfig.class);
+	}
+
+	@Test
+	public void testAmqpAppenderEventQueueTypeDefaultsToLinkedBlockingQueue() throws InterruptedException {
 		Logger logger = LogManager.getLogger("default_queue_logger");
+		logger.info("test");
 		AmqpAppender appender = (AmqpAppender) TestUtils.getPropertyValue(logger, "context.configuration.appenders",
 				Map.class).get("rabbitmq_default_queue");
 
 		Object events = TestUtils.getPropertyValue(appender, "events");
+
+		Object manager = TestUtils.getPropertyValue(appender, "manager");
+		assertThat(TestUtils.getPropertyValue(manager, "addMdcAsHeaders", Boolean.class)).isTrue();
+
 		assertThat(events.getClass()).isEqualTo(LinkedBlockingQueue.class);
+		BlockingQueue<?> queue = (BlockingQueue<?>) events;
+		await().until(() -> queue.size() == 0);
 	}
 
 	@Test
@@ -177,13 +221,15 @@ public class AmqpAppenderTests {
 		AmqpAppender appender = (AmqpAppender) TestUtils.getPropertyValue(logger, "context.configuration.appenders",
 				Map.class).get("rabbitmq_uri");
 		Object manager = TestUtils.getPropertyValue(appender, "manager");
-		assertThat(TestUtils.getPropertyValue(manager, "uri").toString()).isEqualTo("amqp://guest:guest@localhost:5672/");
+		assertThat(TestUtils.getPropertyValue(manager, "uri").toString())
+				.isEqualTo("amqp://guest:guest@localhost:5672/");
 
 		assertThat(TestUtils.getPropertyValue(manager, "host")).isNull();
 		assertThat(TestUtils.getPropertyValue(manager, "port")).isNull();
 		assertThat(TestUtils.getPropertyValue(manager, "username")).isNull();
 		assertThat(TestUtils.getPropertyValue(manager, "password")).isNull();
 		assertThat(TestUtils.getPropertyValue(manager, "virtualHost")).isNull();
+		assertThat(TestUtils.getPropertyValue(manager, "addMdcAsHeaders", Boolean.class)).isFalse();
 	}
 
 	@Test

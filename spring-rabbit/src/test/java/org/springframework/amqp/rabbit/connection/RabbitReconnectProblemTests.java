@@ -21,10 +21,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
 
-import org.junit.Before;
-import org.junit.Ignore;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.AmqpTemplate;
@@ -35,8 +34,7 @@ import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
 import com.rabbitmq.client.ConnectionFactory;
 
@@ -46,9 +44,8 @@ import com.rabbitmq.client.ConnectionFactory;
  * @since 1.5.6
  *
  */
-@ContextConfiguration
-@RunWith(SpringJUnit4ClassRunner.class)
-@Ignore("Requires user interaction")
+@SpringJUnitConfig
+@Disabled("Requires user interaction")
 public class RabbitReconnectProblemTests {
 
 	@Autowired
@@ -62,7 +59,7 @@ public class RabbitReconnectProblemTests {
 
 	final Queue myQueue = new Queue("my-queue");
 
-	@Before
+	@BeforeEach
 	public void setup() {
 		admin.declareQueue(myQueue);
 	}

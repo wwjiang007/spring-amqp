@@ -13,6 +13,56 @@ Spring AMQP version 1.6 introduced the `spring-rabbit-test` jar, which provides 
 It is anticipated that this project will expand over time, but we need community feedback to make suggestions for the features needed to help with testing.
 Please use https://jira.spring.io/browse/AMQP[JIRA] or https://github.com/spring-projects/spring-amqp/issues[GitHub Issues] to provide such feedback.
 
+[[spring-rabbit-test]]
+==== @SpringRabbitTest
+
+Use this annotation to add infrastructure beans to the Spring test `ApplicationContext`.
+This is not necessary when using, for example `@SpringBootTest` since Spring Boot's auto configuration will add the beans.
+
+Beans that are registered are:
+
+* `CachingConnectionFactory` (`autoConnectionFactory`). If `@RabbitEnabled` is present, its connectionn factory is used.
+* `RabbitTemplate` (`autoRabbitTemplate`)
+* `RabbitAdmin` (`autoRabbitAdmin`)
+* `RabbitListenerContainerFactory` (`autoContainerFactory`)
+
+In addition, the beans associated with `@EnableRabbit` (to support `@RabbitListener`) are added.
+
+.Junit5 example
+====
+[source, java]
+----
+@SpringJunitConfig
+@SpringRabbitTest
+public class MyRabbitTests {
+
+	@Autowired
+	private RabbitTemplate template;
+
+	@Autowired
+	private RabbitAdmin admin;
+
+	@Autowired
+	private RabbitListenerEndpointRegistry registry;
+
+	@Test
+	void test() {
+        ...
+	}
+
+	@Configuration
+	public static class Config {
+
+        ...
+
+	}
+
+}
+----
+====
+
+With JUnit4, replace `@SpringJunitConfig` with `@RunWith(SpringRunnner.class)`.
+
 [[mockito-answer]]
 ==== Mockito `Answer<?>` Implementations
 
@@ -24,13 +74,13 @@ The following example shows how to use `LatchCountDownAndCallRealMethodAnswer`:
 ====
 [source, java]
 ----
-LatchCountDownAndCallRealMethodAnswer answer = new LatchCountDownAndCallRealMethodAnswer(2);
+LatchCountDownAndCallRealMethodAnswer answer = this.harness.getLatchAnswerFor("myListener", 2);
 doAnswer(answer)
     .when(listener).foo(anyString(), anyString());
 
 ...
 
-assertTrue(answer.getLatch().await(10, TimeUnit.SECONDS));
+assertThat(answer.await(10)).isTrue();
 ----
 ====
 
@@ -73,19 +123,10 @@ assertEquals("thingthing", thing.thing("thing"));
 ----
 ====
 
-The following example shows how to test the `Thing` POJO with Java 7 or earlier:
+Starting with version 2.2.3, the answers capture any exceptions thrown by the method under test.
+Use `answer.getExceptions()` to get a reference to them.
 
-====
-[source, java]
-----
-doAnswer(new LambdaAnswer<String>(true, new ValueToReturn<String>() {
-    @Override
-    public String apply(InvocationOnMock i, String r) {
-        return r + r;
-    }
-})).when(thing).thing(anyString());
-----
-====
+When used in conjunction with the <<test-harness>> use `harness.getLambdaAnswerFor("listenerId", true, ...)` to get a properly constructed answer for the listener.
 
 [[test-harness]]
 ==== `@RabbitListenerTest` and `RabbitListenerTestHarness`
@@ -157,13 +198,13 @@ public class MyTests {
         Listener listener = this.harness.getSpy("bar");
         assertNotNull(listener);
 
-        LatchCountDownAndCallRealMethodAnswer answer = new LatchCountDownAndCallRealMethodAnswer(2); <3>
+        LatchCountDownAndCallRealMethodAnswer answer = this.harness.getLatchAnswerFor("bar", 2); <3>
         doAnswer(answer).when(listener).foo(anyString(), anyString()); <4>
 
         this.rabbitTemplate.convertAndSend(this.queue2.getName(), "bar");
         this.rabbitTemplate.convertAndSend(this.queue2.getName(), "baz");
 
-        assertTrue(answer.getLatch().await(10, TimeUnit.SECONDS));
+        assertTrue(answer.await(10));
         verify(listener).foo("bar", this.queue2.getName());
         verify(listener).foo("baz", this.queue2.getName());
     }
@@ -180,6 +221,7 @@ suspended in the `RabbitTemplate` waiting for the reply.
 <3> In this case, we're only using a send operation so we need a latch to wait for the asynchronous call to the listener
 on the container thread.
 We use one of the link:#mockito-answer[Answer<?>] implementations to help with that.
+IMPORTANT: Due to the way the listener is spied, it is important to use `harness.getLatchAnswerFor()` to get a properly configured answer for the spy.
 
 <4> Configure the spy to invoke the `Answer`.
 ====
@@ -270,6 +312,9 @@ to suspend the test thread.
 
 <5> When the listener throws an exception, it is available in the `throwable` property of the invocation data.
 ====
+
+IMPORTANT: When using custom `Answer<?>` s with the harness, in order to operate properly, such answers should subclass `ForwardsInvocation` and get the actual listener (not the spy) from the harness (`getDelegate("myListener")`) and call `super.answer(invocation)`.
+See the provided <<mockito-answer>> source code for examples.
 
 [[test-template]]
 ==== Using `TestRabbitTemplate`
@@ -522,10 +567,11 @@ Version 2.0.2 introduced support for JUnit5.
 This class-level annotation is similar to the `BrokerRunning` `@Rule` discussed in <<junit-rules>>.
 It is processed by the `RabbitAvailableCondition`.
 
-The annotation has two properties:
+The annotation has three properties:
 
 * `queues`: An array of queues that are declared (and purged) before each test and deleted when all tests are complete.
 * `management`: Set this to `true` if your tests also require the management plugin installed on the broker.
+* `purgeAfterEach`: (Since version 2.2) when `true` (default), the `queues` will be purged between tests.
 
 It is used to check whether the broker is available and skip the tests if not.
 As discussed in <<brokerRunning-configure>>, the environment variable called `RABBITMQ_SERVER_REQUIRED`, if `true`, causes the tests to fail fast if there is no broker.
@@ -534,8 +580,8 @@ You can configure the condition by using environment variables as discussed in <
 In addition, the `RabbitAvailableCondition` supports argument resolution for parameterized test constructors and methods.
 Two argument types are supported:
 
-* `BrokerRunning`: The instance
-* `ConnectionFactory`: The `BrokerRunning` instance's RabbitMQ connection factory
+* `BrokerRunningSupport`: The instance (before 2.2, this was a JUnit 4 `BrokerRunning` instance)
+* `ConnectionFactory`: The `BrokerRunningSupport` instance's RabbitMQ connection factory
 
 The following example shows both:
 
@@ -547,7 +593,7 @@ public class RabbitAvailableCTORInjectionTests {
 
     private final ConnectionFactory connectionFactory;
 
-    public RabbitAvailableCTORInjectionTests(BrokerRunning brokerRunning) {
+    public RabbitAvailableCTORInjectionTests(BrokerRunningSupport brokerRunning) {
         this.connectionFactory = brokerRunning.getConnectionFactory();
     }
 
@@ -578,7 +624,7 @@ public class RabbitAvailableCTORInjectionTests {
 
     private final CachingConnectionFactory connectionFactory;
 
-    public RabbitAvailableCTORInjectionTests(BrokerRunning brokerRunning) {
+    public RabbitAvailableCTORInjectionTests(BrokerRunningSupport brokerRunning) {
         this.connectionFactory =
             new CachingConnectionFactory(brokerRunning.getConnectionFactory());
     }
@@ -593,6 +639,10 @@ public class RabbitAvailableCTORInjectionTests {
 ====
 
 When you use a Spring annotation application context within a test class, you can get a reference to the condition's connection factory through a static method called `RabbitAvailableCondition.getBrokerRunning()`.
+
+IMPORTANT: Starting with version 2.2, `getBrokerRunning()` returns a `BrokerRunningSupport` object; previously, the JUnit 4 `BrokerRunnning` instance was returned.
+The new class has the same API as `BrokerRunning`.
+
 The following test comes from the framework and demonstrates the usage:
 
 ====

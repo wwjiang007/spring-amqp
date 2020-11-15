@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
+import org.springframework.context.Lifecycle;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.lang.Nullable;
 
@@ -33,7 +34,7 @@ import org.springframework.lang.Nullable;
  * @author Gary Russell
  * @author Artem Bilan
  */
-public interface RabbitOperations extends AmqpTemplate {
+public interface RabbitOperations extends AmqpTemplate, Lifecycle {
 
 	/**
 	 * Execute the callback with a channel and reliably close the channel afterwards.
@@ -106,6 +107,21 @@ public interface RabbitOperations extends AmqpTemplate {
 	 * @since 2.0
 	 */
 	ConnectionFactory getConnectionFactory();
+
+	/**
+	 * Send a message to the default exchange with a specific routing key.
+	 *
+	 * @param routingKey the routing key
+	 * @param message a message to send
+	 * @param correlationData data to correlate publisher confirms.
+	 * @throws AmqpException if there is a problem
+	 * @since 2.3
+	 */
+	default void send(String routingKey, Message message, CorrelationData correlationData)
+			throws AmqpException {
+
+		throw new UnsupportedOperationException("This implementation does not support this method");
+	}
 
 	/**
 	 * Send a message to a specific exchange with a specific routing key.
@@ -420,6 +436,22 @@ public interface RabbitOperations extends AmqpTemplate {
 			@Nullable MessagePostProcessor messagePostProcessor,
 			@Nullable CorrelationData correlationData,
 			ParameterizedTypeReference<T> responseType) throws AmqpException;
+
+
+	@Override
+	default void start() {
+		// No-op - implemented for backward compatibility
+	}
+
+	@Override
+	default void stop() {
+		// No-op - implemented for backward compatibility
+	}
+
+	@Override
+	default boolean isRunning() {
+		return false;
+	}
 
 	/**
 	 * Callback for using the same channel for multiple RabbitTemplate

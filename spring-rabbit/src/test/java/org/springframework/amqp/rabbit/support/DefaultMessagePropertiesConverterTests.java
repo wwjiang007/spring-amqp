@@ -25,8 +25,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.MessageProperties;
@@ -52,7 +52,7 @@ public class DefaultMessagePropertiesConverterTests {
 
 	private String longStringString;
 
-	@Before
+	@BeforeEach
 	public void init() throws UnsupportedEncodingException {
 		longStringString = new String(longString.getBytes(), "UTF-8");
 	}
@@ -193,10 +193,17 @@ public class DefaultMessagePropertiesConverterTests {
 		assertThat(props.getDeliveryMode()).isNull();
 	}
 
+	@Test
+	public void testClassHeader() {
+		MessageProperties props = new MessageProperties();
+		props.setHeader("aClass", getClass());
+		BasicProperties basic = new DefaultMessagePropertiesConverter().fromMessageProperties(props, "UTF8");
+		assertThat(basic.getHeaders().get("aClass")).isEqualTo(getClass().getName());
+	}
+
 	private static class Foo {
 
 		Foo() {
-			super();
 		}
 
 		@Override

@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,7 +50,7 @@ import org.apache.commons.logging.Log;
 import org.springframework.amqp.AmqpApplicationContextClosedException;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.AmqpTimeoutException;
-import org.springframework.amqp.rabbit.listener.ActiveObjectCounter;
+import org.springframework.amqp.rabbit.support.ActiveObjectCounter;
 import org.springframework.amqp.support.ConditionalExceptionLogger;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.jmx.export.annotation.ManagedAttribute;
@@ -129,14 +129,41 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 	 * The cache mode.
 	 */
 	public enum CacheMode {
+
 		/**
 		 * Cache channels - single connection.
 		 */
 		CHANNEL,
+
 		/**
 		 * Cache connections and channels within each connection.
 		 */
 		CONNECTION
+
+	}
+
+	/**
+	 * The type of publisher confirms to use.
+	 */
+	public enum ConfirmType {
+
+		/**
+		 * Use {@code RabbitTemplate#waitForConfirms()} (or {@code waitForConfirmsOrDie()}
+		 * within scoped operations.
+		 */
+		SIMPLE,
+
+		/**
+		 * Use with {@code CorrelationData} to correlate confirmations with sent
+		 * messsages.
+		 */
+		CORRELATED,
+
+		/**
+		 * Publisher confirms are disabled (default).
+		 */
+		NONE
+
 	}
 
 	private final Set<ChannelCachingConnectionProxy> allocatedConnections = new HashSet<>();
@@ -176,9 +203,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 
 	private int connectionLimit = Integer.MAX_VALUE;
 
-	private boolean publisherConfirms;
-
-	private boolean simplePublisherConfirms;
+	private ConfirmType confirmType = ConfirmType.NONE;
 
 	private boolean publisherReturns;
 
@@ -356,7 +381,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 
 	@Override
 	public boolean isPublisherConfirms() {
-		return this.publisherConfirms;
+		return ConfirmType.CORRELATED.equals(this.confirmType);
 	}
 
 	@Override
@@ -372,16 +397,22 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 	}
 
 	/**
-	 * Use full publisher confirms, with correlation data and a callback for each message.
+	 * Use full (correlated) publisher confirms, with correlation data and a callback for
+	 * each message.
 	 * @param publisherConfirms true for full publisher returns,
 	 * @since 1.1
+	 * @deprecated in favor of {@link #setPublisherConfirmType(ConfirmType)}.
 	 * @see #setSimplePublisherConfirms(boolean)
 	 */
+	@Deprecated
 	public void setPublisherConfirms(boolean publisherConfirms) {
-		Assert.isTrue(!this.simplePublisherConfirms, "Cannot set both publisherConfirms and simplePublisherConfirms");
-		this.publisherConfirms = publisherConfirms;
-		if (this.publisherConnectionFactory != null) {
-			this.publisherConnectionFactory.setPublisherConfirms(publisherConfirms);
+		Assert.isTrue(!publisherConfirms || !ConfirmType.SIMPLE.equals(this.confirmType),
+				"Cannot set both publisherConfirms and simplePublisherConfirms");
+		if (publisherConfirms) {
+			setPublisherConfirmType(ConfirmType.CORRELATED);
+		}
+		else if (this.confirmType.equals(ConfirmType.CORRELATED)) {
+			setPublisherConfirmType(ConfirmType.NONE);
 		}
 	}
 
@@ -389,19 +420,37 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 	 * Use simple publisher confirms where the template simply waits for completion.
 	 * @param simplePublisherConfirms true for confirms.
 	 * @since 2.1
+	 * @deprecated in favor of {@link #setPublisherConfirmType(ConfirmType)}.
 	 * @see #setPublisherConfirms(boolean)
 	 */
+	@Deprecated
 	public void setSimplePublisherConfirms(boolean simplePublisherConfirms) {
-		Assert.isTrue(!this.publisherConfirms, "Cannot set both publisherConfirms and simplePublisherConfirms");
-		this.simplePublisherConfirms = simplePublisherConfirms;
-		if (this.publisherConnectionFactory != null) {
-			this.publisherConnectionFactory.setSimplePublisherConfirms(simplePublisherConfirms);
+		Assert.isTrue(!simplePublisherConfirms || !ConfirmType.CORRELATED.equals(this.confirmType),
+				"Cannot set both publisherConfirms and simplePublisherConfirms");
+		if (simplePublisherConfirms) {
+			setPublisherConfirmType(ConfirmType.SIMPLE);
+		}
+		else if (this.confirmType.equals(ConfirmType.SIMPLE)) {
+			setPublisherConfirmType(ConfirmType.NONE);
 		}
 	}
 
 	@Override
 	public boolean isSimplePublisherConfirms() {
-		return this.simplePublisherConfirms;
+		return this.confirmType.equals(ConfirmType.SIMPLE);
+	}
+
+	/**
+	 * Set the confirm type to use; default {@link ConfirmType#NONE}.
+	 * @param confirmType the confirm type.
+	 * @since 2.2
+	 */
+	public void setPublisherConfirmType(ConfirmType confirmType) {
+		Assert.notNull(confirmType, "'confirmType' cannot be null");
+		this.confirmType = confirmType;
+		if (this.publisherConnectionFactory != null) {
+			this.publisherConnectionFactory.setPublisherConfirmType(confirmType);
+		}
 	}
 
 	/**
@@ -630,7 +679,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 		}
 		getChannelListener().onCreate(targetChannel, transactional);
 		Class<?>[] interfaces;
-		if (this.publisherConfirms || this.publisherReturns) {
+		if (ConfirmType.CORRELATED.equals(this.confirmType) || this.publisherReturns) {
 			interfaces = new Class<?>[] { ChannelProxy.class, PublisherCallbackChannel.class };
 		}
 		else {
@@ -672,7 +721,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 
 	private Channel doCreateBareChannel(ChannelCachingConnectionProxy conn, boolean transactional) {
 		Channel channel = conn.createBareChannel(transactional);
-		if (this.publisherConfirms || this.simplePublisherConfirms) {
+		if (!ConfirmType.NONE.equals(this.confirmType)) {
 			try {
 				channel.confirmSelect();
 			}
@@ -680,7 +729,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 				logger.error("Could not configure the channel to receive publisher confirms", e);
 			}
 		}
-		if ((this.publisherConfirms || this.publisherReturns)
+		if ((ConfirmType.CORRELATED.equals(this.confirmType) || this.publisherReturns)
 				&& !(channel instanceof PublisherCallbackChannelImpl)) {
 			channel = this.publisherChannelFactory.createChannel(channel, getChannelsExecutor());
 		}
@@ -719,7 +768,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 	private Connection connectionFromCache() {
 		ChannelCachingConnectionProxy cachedConnection = findIdleConnection();
 		long now = System.currentTimeMillis();
-		if (cachedConnection == null) {
+		if (cachedConnection == null && countOpenConnections() >= this.connectionLimit) {
 			cachedConnection = waitForConnection(now);
 		}
 		if (cachedConnection == null) {
@@ -1037,9 +1086,10 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 
 		private final boolean transactional;
 
-		private final boolean confirmSelected = CachingConnectionFactory.this.simplePublisherConfirms;
+		private final boolean confirmSelected = ConfirmType.SIMPLE.equals(CachingConnectionFactory.this.confirmType);
 
-		private final boolean publisherConfirms = CachingConnectionFactory.this.publisherConfirms;
+		private final boolean publisherConfirms =
+				ConfirmType.CORRELATED.equals(CachingConnectionFactory.this.confirmType);
 
 		private volatile Channel target;
 
@@ -1086,20 +1136,14 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 			}
 			else if (methodName.equals("close")) {
 				// Handle close method: don't pass the call on.
-				if (CachingConnectionFactory.this.active) {
-					synchronized (this.channelList) {
-						if (CachingConnectionFactory.this.active && !RabbitUtils.isPhysicalCloseRequired() &&
-								(this.channelList.size() < getChannelCacheSize()
-										|| this.channelList.contains(proxy))) {
-							logicalClose((ChannelProxy) proxy);
-							return null;
-						}
-					}
+				if (CachingConnectionFactory.this.active && !RabbitUtils.isPhysicalCloseRequired()) {
+					logicalClose((ChannelProxy) proxy);
+					return null;
 				}
-
-				// If we get here, we're supposed to shut down.
-				physicalClose(proxy);
-				return null;
+				else {
+					physicalClose(proxy);
+					return null;
+				}
 			}
 			else if (methodName.equals("getTargetChannel")) {
 				// Handle getTargetChannel method: return underlying Channel.
@@ -1241,14 +1285,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 				synchronized (this.channelList) {
 					// Allow for multiple close calls...
 					if (CachingConnectionFactory.this.active) {
-						if (!this.channelList.contains(proxy)) {
-							if (logger.isTraceEnabled()) {
-								logger.trace("Returning cached Channel: " + this.target);
-							}
-							releasePermitIfNecessary(proxy);
-							this.channelList.addLast((ChannelProxy) proxy);
-							setHighWaterMark();
-						}
+						cacheOrClose(proxy);
 					}
 					else {
 						if (proxy.isOpen()) {
@@ -1260,6 +1297,28 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 						}
 					}
 				}
+			}
+		}
+
+		private void cacheOrClose(Channel proxy) {
+			boolean alreadyCached = this.channelList.contains(proxy);
+			if (this.channelList.size() >= getChannelCacheSize() && !alreadyCached) {
+				if (logger.isTraceEnabled()) {
+					logger.trace("Cache limit reached: " + this.target);
+				}
+				try {
+					physicalClose(proxy);
+				}
+				catch (@SuppressWarnings(UNUSED) Exception e) {
+				}
+			}
+			else if (!alreadyCached) {
+				if (logger.isTraceEnabled()) {
+					logger.trace("Returning cached Channel: " + this.target);
+				}
+				releasePermitIfNecessary(proxy);
+				this.channelList.addLast((ChannelProxy) proxy);
+				setHighWaterMark();
 			}
 		}
 
@@ -1279,13 +1338,14 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 			if (logger.isDebugEnabled()) {
 				logger.debug("Closing cached Channel: " + this.target);
 			}
+			RabbitUtils.clearPhysicalCloseRequired();
 			if (this.target == null) {
 				return;
 			}
 			boolean async = false;
 			try {
 				if (CachingConnectionFactory.this.active &&
-						(CachingConnectionFactory.this.publisherConfirms ||
+						(ConfirmType.CORRELATED.equals(CachingConnectionFactory.this.confirmType) ||
 								CachingConnectionFactory.this.publisherReturns)) {
 					async = true;
 					asyncClose(proxy);
@@ -1317,7 +1377,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 			try {
 				executorService.execute(() -> {
 					try {
-						if (CachingConnectionFactory.this.publisherConfirms) {
+						if (ConfirmType.CORRELATED.equals(CachingConnectionFactory.this.confirmType)) {
 							channel.waitForConfirmsOrDie(ASYNC_CLOSE_TIMEOUT);
 						}
 						else {
@@ -1496,7 +1556,6 @@ public class CachingConnectionFactory extends AbstractConnectionFactory
 	private static class DefaultChannelCloseLogger implements ConditionalExceptionLogger {
 
 		DefaultChannelCloseLogger() {
-			super();
 		}
 
 		@Override

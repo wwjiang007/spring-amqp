@@ -27,7 +27,7 @@ import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import org.springframework.amqp.core.Message;
@@ -41,7 +41,7 @@ import org.springframework.core.serializer.Deserializer;
  * @author Mark Fisher
  * @author Gary Russell
  */
-public class SerializerMessageConverterTests extends WhiteListDeserializingMessageConverterTests {
+public class SerializerMessageConverterTests extends AllowedListDeserializingMessageConverterTests {
 
 	@Test
 	public void bytesAsDefaultMessageBodyType() throws Exception {

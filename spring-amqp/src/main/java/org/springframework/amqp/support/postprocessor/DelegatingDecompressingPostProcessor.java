@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 the original author or authors.
+ * Copyright 2014-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,9 +26,10 @@ import org.springframework.core.Ordered;
 
 /**
  * A {@link MessagePostProcessor} that delegates to one of its {@link MessagePostProcessor}s
- * depending on the content encoding. Supports {@code gzip, zip} by default.
+ * depending on the content encoding. Supports {@code gzip, zip, deflate} by default.
  *
  * @author Gary Russell
+ * @author David Diehl
  * @since 1.4.2
  */
 public class DelegatingDecompressingPostProcessor implements MessagePostProcessor, Ordered {
@@ -40,6 +41,7 @@ public class DelegatingDecompressingPostProcessor implements MessagePostProcesso
 	public DelegatingDecompressingPostProcessor() {
 		this.decompressors.put("gzip", new GUnzipPostProcessor());
 		this.decompressors.put("zip", new UnzipPostProcessor());
+		this.decompressors.put("deflate", new InflaterPostProcessor());
 	}
 
 	@Override
@@ -92,9 +94,12 @@ public class DelegatingDecompressingPostProcessor implements MessagePostProcesso
 			return message;
 		}
 		else {
-			int colonAt = encoding.indexOf(':');
-			if (colonAt > 0) {
-				encoding = encoding.substring(0, colonAt);
+			int delimAt = encoding.indexOf(':');
+			if (delimAt < 0) {
+				delimAt = encoding.indexOf(',');
+			}
+			if (delimAt > 0) {
+				encoding = encoding.substring(0, delimAt);
 			}
 			MessagePostProcessor decompressor = this.decompressors.get(encoding);
 			if (decompressor != null) {

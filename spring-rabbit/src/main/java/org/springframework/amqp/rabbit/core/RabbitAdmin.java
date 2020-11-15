@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import org.apache.commons.logging.Log;
@@ -35,6 +36,7 @@ import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.Declarable;
+import org.springframework.amqp.core.DeclarableCustomizer;
 import org.springframework.amqp.core.Declarables;
 import org.springframework.amqp.core.Exchange;
 import org.springframework.amqp.core.Queue;
@@ -137,6 +139,8 @@ public class RabbitAdmin implements AmqpAdmin, ApplicationContextAware, Applicat
 	private ApplicationEventPublisher applicationEventPublisher;
 
 	private TaskExecutor taskExecutor = new SimpleAsyncTaskExecutor();
+
+	private boolean explicitDeclarationsOnly;
 
 	private volatile boolean running = false;
 
@@ -430,6 +434,17 @@ public class RabbitAdmin implements AmqpAdmin, ApplicationContextAware, Applicat
 	}
 
 	/**
+	 * Set to true to only declare {@link Declarable} beans that are explicitly configured
+	 * to be declared by this admin.
+	 * @param explicitDeclarationsOnly true to ignore beans with no admin declaration
+	 * configuration.
+	 * @since 2.1.9
+	 */
+	public void setExplicitDeclarationsOnly(boolean explicitDeclarationsOnly) {
+		this.explicitDeclarationsOnly = explicitDeclarationsOnly;
+	}
+
+	/**
 	 * Set a retry template for auto declarations. There is a race condition with
 	 * auto-delete, exclusive queues in that the queue might still exist for a short time,
 	 * preventing the redeclaration. The default retry configuration will try 5 times with
@@ -552,12 +567,14 @@ public class RabbitAdmin implements AmqpAdmin, ApplicationContextAware, Applicat
 				this.applicationContext.getBeansOfType(Queue.class).values());
 		Collection<Binding> contextBindings = new LinkedList<Binding>(
 				this.applicationContext.getBeansOfType(Binding.class).values());
+		Collection<DeclarableCustomizer> customizers =
+				this.applicationContext.getBeansOfType(DeclarableCustomizer.class).values();
 
 		processDeclarables(contextExchanges, contextQueues, contextBindings);
 
-		final Collection<Exchange> exchanges = filterDeclarables(contextExchanges);
-		final Collection<Queue> queues = filterDeclarables(contextQueues);
-		final Collection<Binding> bindings = filterDeclarables(contextBindings);
+		final Collection<Exchange> exchanges = filterDeclarables(contextExchanges, customizers);
+		final Collection<Queue> queues = filterDeclarables(contextQueues, customizers);
+		final Collection<Binding> bindings = filterDeclarables(contextBindings, customizers);
 
 		for (Exchange exchange : exchanges) {
 			if ((!exchange.isDurable() || exchange.isAutoDelete())  && this.logger.isInfoEnabled()) {
@@ -596,6 +613,7 @@ public class RabbitAdmin implements AmqpAdmin, ApplicationContextAware, Applicat
 
 	private void processDeclarables(Collection<Exchange> contextExchanges, Collection<Queue> contextQueues,
 			Collection<Binding> contextBindings) {
+
 		Collection<Declarables> declarables = this.applicationContext.getBeansOfType(Declarables.class, false, true)
 				.values();
 		declarables.forEach(d -> {
@@ -616,16 +634,32 @@ public class RabbitAdmin implements AmqpAdmin, ApplicationContextAware, Applicat
 	/**
 	 * Remove any instances that should not be declared by this admin.
 	 * @param declarables the collection of {@link Declarable}s.
+	 * @param customizers a collection if {@link DeclarableCustomizer} beans.
 	 * @param <T> the declarable type.
 	 * @return a new collection containing {@link Declarable}s that should be declared by this
 	 * admin.
 	 */
-	private <T extends Declarable> Collection<T> filterDeclarables(Collection<T> declarables) {
+	@SuppressWarnings("unchecked")
+	private <T extends Declarable> Collection<T> filterDeclarables(Collection<T> declarables,
+			Collection<DeclarableCustomizer> customizers) {
+
 		return declarables.stream()
-				.filter(d -> d.shouldDeclare() // NOSONAR boolean complexity
-						&& (d.getDeclaringAdmins().isEmpty() || d.getDeclaringAdmins().contains(this)
-								|| (this.beanName != null && d.getDeclaringAdmins().contains(this.beanName))))
+				.filter(dec -> dec.shouldDeclare() && declarableByMe(dec))
+				.map(dec -> {
+					if (customizers.isEmpty()) {
+						return dec;
+					}
+					AtomicReference<T> ref = new AtomicReference<>(dec);
+					customizers.forEach(cust -> ref.set((T) cust.apply(ref.get())));
+					return ref.get();
+				})
 				.collect(Collectors.toList());
+	}
+
+	private <T extends Declarable> boolean declarableByMe(T dec) {
+		return (dec.getDeclaringAdmins().isEmpty() && !this.explicitDeclarationsOnly) // NOSONAR boolean complexity
+				|| dec.getDeclaringAdmins().contains(this)
+				|| (this.beanName != null && dec.getDeclaringAdmins().contains(this.beanName));
 	}
 
 	// private methods for declaring Exchanges, Queues, and Bindings on a Channel

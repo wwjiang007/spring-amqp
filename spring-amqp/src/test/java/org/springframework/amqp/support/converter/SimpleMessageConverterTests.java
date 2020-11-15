@@ -25,7 +25,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
@@ -34,7 +34,7 @@ import org.springframework.amqp.core.MessageProperties;
  * @author Mark Fisher
  * @author Gary Russell
  */
-public class SimpleMessageConverterTests extends WhiteListDeserializingMessageConverterTests {
+public class SimpleMessageConverterTests extends AllowedListDeserializingMessageConverterTests {
 
 	@Test
 	public void bytesAsDefaultMessageBodyType() throws Exception {

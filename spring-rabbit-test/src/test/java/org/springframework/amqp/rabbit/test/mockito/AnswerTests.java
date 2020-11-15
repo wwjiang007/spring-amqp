@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,11 +17,14 @@
 package org.springframework.amqp.rabbit.test.mockito;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doAnswer;
+import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.spy;
 
-import org.junit.Test;
+import java.util.Collection;
+
+import org.junit.jupiter.api.Test;
 
 /**
  * @author Gary Russell
@@ -32,23 +35,33 @@ public class AnswerTests {
 
 	@Test
 	public void testLambda() {
-		Foo foo = spy(new Foo());
-		doAnswer(new LambdaAnswer<String>(true, (i, r) -> r + r)).when(foo).foo(anyString());
+		Foo delegate = new Foo();
+		Foo foo = spy(delegate);
+		willAnswer(new LambdaAnswer<String>(true, (i, r) -> r + r, delegate)).given(foo).foo(anyString());
 		assertThat(foo.foo("foo")).isEqualTo("FOOFOO");
-		doAnswer(new LambdaAnswer<String>(true, (i, r) -> r + i.getArguments()[0])).when(foo).foo(anyString());
+		willAnswer(new LambdaAnswer<String>(true, (i, r) -> r + i.getArguments()[0], delegate))
+				.given(foo).foo(anyString());
 		assertThat(foo.foo("foo")).isEqualTo("FOOfoo");
-		doAnswer(new LambdaAnswer<String>(false, (i, r) ->
-			"" + i.getArguments()[0] + i.getArguments()[0])).when(foo).foo(anyString());
+		willAnswer(new LambdaAnswer<String>(false, (i, r) ->
+			"" + i.getArguments()[0] + i.getArguments()[0], delegate)).given(foo).foo(anyString());
 		assertThat(foo.foo("foo")).isEqualTo("foofoo");
+		LambdaAnswer<String> answer = new LambdaAnswer<>(true, (inv, result) -> result, delegate);
+		willAnswer(answer).given(foo).foo("fail");
+		assertThatIllegalArgumentException().isThrownBy(() -> foo.foo("fail"));
+		Collection<Exception> exceptions = answer.getExceptions();
+		assertThat(exceptions).hasSize(1);
+		assertThat(exceptions.iterator().next()).isInstanceOf(IllegalArgumentException.class);
 	}
 
 	private static class Foo {
 
 		Foo() {
-			super();
 		}
 
 		public String foo(String foo) {
+			if (foo.equals("fail")) {
+				throw new IllegalArgumentException("fail");
+			}
 			return foo.toUpperCase();
 		}
 

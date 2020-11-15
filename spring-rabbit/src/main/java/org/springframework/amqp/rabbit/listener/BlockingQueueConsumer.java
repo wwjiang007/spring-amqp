@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,6 +55,8 @@ import org.springframework.amqp.rabbit.connection.ConnectionFactoryUtils;
 import org.springframework.amqp.rabbit.connection.RabbitResourceHolder;
 import org.springframework.amqp.rabbit.connection.RabbitUtils;
 import org.springframework.amqp.rabbit.listener.exception.FatalListenerStartupException;
+import org.springframework.amqp.rabbit.listener.support.ContainerUtils;
+import org.springframework.amqp.rabbit.support.ActiveObjectCounter;
 import org.springframework.amqp.rabbit.support.ConsumerCancelledException;
 import org.springframework.amqp.rabbit.support.Delivery;
 import org.springframework.amqp.rabbit.support.MessagePropertiesConverter;
@@ -67,7 +69,6 @@ import org.springframework.util.ObjectUtils;
 import org.springframework.util.backoff.BackOffExecution;
 
 import com.rabbitmq.client.AMQP;
-import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.DefaultConsumer;
 import com.rabbitmq.client.Envelope;
@@ -85,6 +86,7 @@ import com.rabbitmq.utility.Utility;
  * @author Artem Bilan
  * @author Alex Panchenko
  * @author Johno Crawford
+ * @author Ian Roberts
  */
 public class BlockingQueueConsumer {
 
@@ -155,6 +157,8 @@ public class BlockingQueueConsumer {
 	private boolean locallyTransacted;
 
 	private ApplicationEventPublisher applicationEventPublisher;
+
+	private long consumeDelay;
 
 	private volatile long abortStarted;
 
@@ -371,6 +375,17 @@ public class BlockingQueueConsumer {
 	}
 
 	/**
+	 * Set the consumeDelay - a time to wait before consuming in ms. This is useful when
+	 * using the sharding plugin with {@code concurrency > 1}, to avoid uneven distribution of
+	 * consumers across the shards. See the plugin README for more information.
+	 * @param consumeDelay the consume delay.
+	 * @since 2.3
+	 */
+	public void setConsumeDelay(long consumeDelay) {
+		this.consumeDelay = consumeDelay;
+	}
+
+	/**
 	 * Clear the delivery tags when rolling back with an external transaction
 	 * manager.
 	 * @since 1.6.6
@@ -402,20 +417,8 @@ public class BlockingQueueConsumer {
 	protected void basicCancel(boolean expected) {
 		this.normalCancel = expected;
 		getConsumerTags().forEach(consumerTag -> {
-			try {
-				if (this.channel.isOpen()) {
-					this.channel.basicCancel(consumerTag);
-				}
-			}
-			catch (IOException | IllegalStateException e) {
-				if (logger.isDebugEnabled()) {
-					logger.debug("Error performing 'basicCancel'", e);
-				}
-			}
-			catch (AlreadyClosedException e) {
-				if (logger.isTraceEnabled()) {
-					logger.trace(this.channel + " is already closed");
-				}
+			if (this.channel.isOpen()) {
+				RabbitUtils.cancel(this.channel, consumerTag);
 			}
 		});
 		this.cancelled.set(true);
@@ -579,7 +582,7 @@ public class BlockingQueueConsumer {
 		this.activeObjectCounter.add(this);
 
 		passiveDeclarations();
-		setQosAndreateConsumers();
+		setQosAndCreateConsumers();
 	}
 
 	private void passiveDeclarations() {
@@ -605,7 +608,15 @@ public class BlockingQueueConsumer {
 		this.declaring = false;
 	}
 
-	private void setQosAndreateConsumers() {
+	private void setQosAndCreateConsumers() {
+		if (this.consumeDelay > 0) {
+			try {
+				Thread.sleep(this.consumeDelay);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		}
 		if (!this.acknowledgeMode.isAutoAck() && !cancelled()) {
 			// Set basicQos before calling basicConsume (otherwise if we are not acking the broker
 			// will send blocks of 100 messages)
@@ -636,15 +647,15 @@ public class BlockingQueueConsumer {
 		if (passiveDeclareRetries > 0 && this.channel.isOpen()) {
 			if (logger.isWarnEnabled()) {
 				logger.warn("Queue declaration failed; retries left=" + (passiveDeclareRetries), e);
-				try {
-					Thread.sleep(this.failedDeclarationRetryInterval);
-				}
-				catch (InterruptedException e1) {
-					this.declaring = false;
-					Thread.currentThread().interrupt();
-					this.activeObjectCounter.release(this);
-					throw RabbitExceptionTranslator.convertRabbitAccessException(e1); // NOSONAR stack trace loss
-				}
+			}
+			try {
+				Thread.sleep(this.failedDeclarationRetryInterval);
+			}
+			catch (InterruptedException e1) {
+				this.declaring = false;
+				Thread.currentThread().interrupt();
+				this.activeObjectCounter.release(this);
+				throw RabbitExceptionTranslator.convertRabbitAccessException(e1); // NOSONAR stack trace loss
 			}
 		}
 		else if (e.getFailedQueues().size() < this.queues.length) {
@@ -747,7 +758,8 @@ public class BlockingQueueConsumer {
 	 */
 	public void rollbackOnExceptionIfNecessary(Throwable ex) {
 
-		boolean ackRequired = !this.acknowledgeMode.isAutoAck() && !this.acknowledgeMode.isManual();
+		boolean ackRequired = !this.acknowledgeMode.isAutoAck()
+				&& (!this.acknowledgeMode.isManual() || ContainerUtils.isRejectManual(ex));
 		try {
 			if (this.transactional) {
 				if (logger.isDebugEnabled()) {
@@ -778,11 +790,11 @@ public class BlockingQueueConsumer {
 
 	/**
 	 * Perform a commit or message acknowledgement, as appropriate.
-	 * @param locallyTransacted Whether the channel is locally transacted.
+	 * @param localTx Whether the channel is locally transacted.
 	 * @return true if at least one delivery tag exists.
 	 * @throws IOException Any IOException.
 	 */
-	public boolean commitIfNecessary(boolean locallyTransacted) throws IOException {
+	public boolean commitIfNecessary(boolean localTx) throws IOException {
 
 		if (this.deliveryTags.isEmpty()) {
 			return false;
@@ -791,7 +803,7 @@ public class BlockingQueueConsumer {
 		/*
 		 * If we have a TX Manager, but no TX, act like we are locally transacted.
 		 */
-		boolean isLocallyTransacted = locallyTransacted
+		boolean isLocallyTransacted = localTx
 				|| (this.transactional
 				&& TransactionSynchronizationManager.getResource(this.connectionFactory) == null);
 		try {
@@ -909,7 +921,7 @@ public class BlockingQueueConsumer {
 						// Defensive - should never happen
 						BlockingQueueConsumer.this.queue.clear();
 						if (!this.canceled) {
-							channelToClose.basicCancel(consumerTag);
+							RabbitUtils.cancel(channelToClose, consumerTag);
 						}
 						try {
 							channelToClose.close();
