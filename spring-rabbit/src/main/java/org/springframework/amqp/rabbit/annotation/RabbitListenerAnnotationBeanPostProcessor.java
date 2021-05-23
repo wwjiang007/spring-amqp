@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2020 the original author or authors.
+ * Copyright 2014-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,6 +38,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import org.springframework.amqp.core.AcknowledgeMode;
+import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Base64UrlNamingStrategy;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.Binding.DestinationType;
@@ -84,12 +85,14 @@ import org.springframework.core.task.TaskExecutor;
 import org.springframework.lang.Nullable;
 import org.springframework.messaging.handler.annotation.support.DefaultMessageHandlerMethodFactory;
 import org.springframework.messaging.handler.annotation.support.MessageHandlerMethodFactory;
+import org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver;
 import org.springframework.messaging.handler.invocation.InvocableHandlerMethod;
 import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.util.StringUtils;
+import org.springframework.validation.Validator;
 
 /**
  * Bean post-processor that registers methods annotated with {@link RabbitListener}
@@ -415,20 +418,7 @@ public class RabbitListenerAnnotationBeanPostProcessor
 		endpoint.setConcurrency(resolveExpressionAsStringOrInteger(rabbitListener.concurrency(), "concurrency"));
 		endpoint.setBeanFactory(this.beanFactory);
 		endpoint.setReturnExceptions(resolveExpressionAsBoolean(rabbitListener.returnExceptions()));
-		Object errorHandler = resolveExpression(rabbitListener.errorHandler());
-		if (errorHandler instanceof RabbitListenerErrorHandler) {
-			endpoint.setErrorHandler((RabbitListenerErrorHandler) errorHandler);
-		}
-		else if (errorHandler instanceof String) {
-			String errorHandlerBeanName = (String) errorHandler;
-			if (StringUtils.hasText(errorHandlerBeanName)) {
-				endpoint.setErrorHandler(this.beanFactory.getBean(errorHandlerBeanName, RabbitListenerErrorHandler.class));
-			}
-		}
-		else {
-			throw new IllegalStateException("error handler mut be a bean name or RabbitListenerErrorHandler, not a "
-					+ errorHandler.getClass().toString());
-		}
+		resolveErrorHandler(endpoint, rabbitListener);
 		String group = rabbitListener.group();
 		if (StringUtils.hasText(group)) {
 			Object resolvedGroup = resolveExpression(group);
@@ -465,6 +455,20 @@ public class RabbitListenerAnnotationBeanPostProcessor
 		return declarables;
 	}
 
+	private void resolveErrorHandler(MethodRabbitListenerEndpoint endpoint, RabbitListener rabbitListener) {
+		Object errorHandler = resolveExpression(rabbitListener.errorHandler());
+		if (errorHandler instanceof RabbitListenerErrorHandler) {
+			endpoint.setErrorHandler((RabbitListenerErrorHandler) errorHandler);
+		}
+		else {
+			String errorHandlerBeanName = resolveExpressionAsString(rabbitListener.errorHandler(), "errorHandler");
+			if (StringUtils.hasText(errorHandlerBeanName)) {
+				endpoint.setErrorHandler(
+						this.beanFactory.getBean(errorHandlerBeanName, RabbitListenerErrorHandler.class));
+			}
+		}
+	}
+
 	private void resolveAckMode(MethodRabbitListenerEndpoint endpoint, RabbitListener rabbitListener) {
 		String ackModeAttr = rabbitListener.ackMode();
 		if (StringUtils.hasText(ackModeAttr)) {
@@ -482,16 +486,22 @@ public class RabbitListenerAnnotationBeanPostProcessor
 	}
 
 	private void resolveAdmin(MethodRabbitListenerEndpoint endpoint, RabbitListener rabbitListener, Object adminTarget) {
-		String rabbitAdmin = resolveExpressionAsString(rabbitListener.admin(), "admin");
-		if (StringUtils.hasText(rabbitAdmin)) {
-			Assert.state(this.beanFactory != null, "BeanFactory must be set to resolve RabbitAdmin by bean name");
-			try {
-				endpoint.setAdmin(this.beanFactory.getBean(rabbitAdmin, RabbitAdmin.class));
-			}
-			catch (NoSuchBeanDefinitionException ex) {
-				throw new BeanInitializationException("Could not register rabbit listener endpoint on [" +
-						adminTarget + "], no " + RabbitAdmin.class.getSimpleName() + " with id '" +
-						rabbitAdmin + "' was found in the application context", ex);
+		Object resolved = resolveExpression(rabbitListener.admin());
+		if (resolved instanceof AmqpAdmin) {
+			endpoint.setAdmin((AmqpAdmin) resolved);
+		}
+		else {
+			String rabbitAdmin = resolveExpressionAsString(rabbitListener.admin(), "admin");
+			if (StringUtils.hasText(rabbitAdmin)) {
+				Assert.state(this.beanFactory != null, "BeanFactory must be set to resolve RabbitAdmin by bean name");
+				try {
+					endpoint.setAdmin(this.beanFactory.getBean(rabbitAdmin, RabbitAdmin.class));
+				}
+				catch (NoSuchBeanDefinitionException ex) {
+					throw new BeanInitializationException("Could not register rabbit listener endpoint on [" +
+							adminTarget + "], no " + RabbitAdmin.class.getSimpleName() + " with id '" +
+							rabbitAdmin + "' was found in the application context", ex);
+				}
 			}
 		}
 	}
@@ -501,6 +511,10 @@ public class RabbitListenerAnnotationBeanPostProcessor
 			Object factoryTarget, String beanName) {
 
 		RabbitListenerContainerFactory<?> factory = null;
+		Object resolved = resolveExpression(rabbitListener.containerFactory());
+		if (resolved instanceof RabbitListenerContainerFactory) {
+			return (RabbitListenerContainerFactory<?>) resolved;
+		}
 		String containerFactoryBeanName = resolveExpressionAsString(rabbitListener.containerFactory(),
 				"containerFactory");
 		if (StringUtils.hasText(containerFactoryBeanName)) {
@@ -520,15 +534,21 @@ public class RabbitListenerAnnotationBeanPostProcessor
 	private void resolveExecutor(MethodRabbitListenerEndpoint endpoint, RabbitListener rabbitListener,
 			Object execTarget, String beanName) {
 
-		String execBeanName = resolveExpressionAsString(rabbitListener.executor(), "executor");
-		if (StringUtils.hasText(execBeanName)) {
-			assertBeanFactory();
-			try {
-				endpoint.setTaskExecutor(this.beanFactory.getBean(execBeanName, TaskExecutor.class));
-			}
-			catch (NoSuchBeanDefinitionException ex) {
-				throw new BeanInitializationException(
-						noBeanFoundMessage(execTarget, beanName, execBeanName, TaskExecutor.class), ex);
+		Object resolved = resolveExpression(rabbitListener.executor());
+		if (resolved instanceof TaskExecutor) {
+			endpoint.setTaskExecutor((TaskExecutor) resolved);
+		}
+		else {
+			String execBeanName = resolveExpressionAsString(rabbitListener.executor(), "executor");
+			if (StringUtils.hasText(execBeanName)) {
+				assertBeanFactory();
+				try {
+					endpoint.setTaskExecutor(this.beanFactory.getBean(execBeanName, TaskExecutor.class));
+				}
+				catch (NoSuchBeanDefinitionException ex) {
+					throw new BeanInitializationException(
+							noBeanFoundMessage(execTarget, beanName, execBeanName, TaskExecutor.class), ex);
+				}
 			}
 		}
 	}
@@ -536,15 +556,21 @@ public class RabbitListenerAnnotationBeanPostProcessor
 	private void resolvePostProcessor(MethodRabbitListenerEndpoint endpoint, RabbitListener rabbitListener,
 			Object target, String beanName) {
 
-		String ppBeanName = resolveExpressionAsString(rabbitListener.replyPostProcessor(), "replyPostProcessor");
-		if (StringUtils.hasText(ppBeanName)) {
-			assertBeanFactory();
-			try {
-				endpoint.setReplyPostProcessor(this.beanFactory.getBean(ppBeanName, ReplyPostProcessor.class));
-			}
-			catch (NoSuchBeanDefinitionException ex) {
-				throw new BeanInitializationException(
-						noBeanFoundMessage(target, beanName, ppBeanName, ReplyPostProcessor.class), ex);
+		Object resolved = resolveExpression(rabbitListener.replyPostProcessor());
+		if (resolved instanceof ReplyPostProcessor) {
+			endpoint.setReplyPostProcessor((ReplyPostProcessor) resolved);
+		}
+		else {
+			String ppBeanName = resolveExpressionAsString(rabbitListener.replyPostProcessor(), "replyPostProcessor");
+			if (StringUtils.hasText(ppBeanName)) {
+				assertBeanFactory();
+				try {
+					endpoint.setReplyPostProcessor(this.beanFactory.getBean(ppBeanName, ReplyPostProcessor.class));
+				}
+				catch (NoSuchBeanDefinitionException ex) {
+					throw new BeanInitializationException(
+							noBeanFoundMessage(target, beanName, ppBeanName, ReplyPostProcessor.class), ex);
+				}
 			}
 		}
 	}
@@ -552,15 +578,21 @@ public class RabbitListenerAnnotationBeanPostProcessor
 	private void resolveMessageConverter(MethodRabbitListenerEndpoint endpoint, RabbitListener rabbitListener,
 			Object target, String beanName) {
 
-		String mcBeanName = resolveExpressionAsString(rabbitListener.messageConverter(), "messageConverter");
-		if (StringUtils.hasText(mcBeanName)) {
-			assertBeanFactory();
-			try {
-				endpoint.setMessageConverter(this.beanFactory.getBean(mcBeanName, MessageConverter.class));
-			}
-			catch (NoSuchBeanDefinitionException ex) {
-				throw new BeanInitializationException(
-						noBeanFoundMessage(target, beanName, mcBeanName, MessageConverter.class), ex);
+		Object resolved = resolveExpression(rabbitListener.messageConverter());
+		if (resolved instanceof MessageConverter) {
+			endpoint.setMessageConverter((MessageConverter) resolved);
+		}
+		else {
+			String mcBeanName = resolveExpressionAsString(rabbitListener.messageConverter(), "messageConverter");
+			if (StringUtils.hasText(mcBeanName)) {
+				assertBeanFactory();
+				try {
+					endpoint.setMessageConverter(this.beanFactory.getBean(mcBeanName, MessageConverter.class));
+				}
+				catch (NoSuchBeanDefinitionException ex) {
+					throw new BeanInitializationException(
+							noBeanFoundMessage(target, beanName, mcBeanName, MessageConverter.class), ex);
+				}
 			}
 		}
 	}
@@ -929,11 +961,19 @@ public class RabbitListenerAnnotationBeanPostProcessor
 
 		private MessageHandlerMethodFactory createDefaultMessageHandlerMethodFactory() {
 			DefaultMessageHandlerMethodFactory defaultFactory = new DefaultMessageHandlerMethodFactory();
+			Validator validator = RabbitListenerAnnotationBeanPostProcessor.this.registrar.getValidator();
+			if (validator != null) {
+				defaultFactory.setValidator(validator);
+			}
 			defaultFactory.setBeanFactory(RabbitListenerAnnotationBeanPostProcessor.this.beanFactory);
 			DefaultConversionService conversionService = new DefaultConversionService();
 			conversionService.addConverter(
 					new BytesToStringConverter(RabbitListenerAnnotationBeanPostProcessor.this.charset));
 			defaultFactory.setConversionService(conversionService);
+
+			List<HandlerMethodArgumentResolver> customArgumentsResolver =
+					new ArrayList<>(RabbitListenerAnnotationBeanPostProcessor.this.registrar.getCustomMethodArgumentResolvers());
+			defaultFactory.setCustomArgumentResolvers(customArgumentsResolver);
 			defaultFactory.afterPropertiesSet();
 			return defaultFactory;
 		}

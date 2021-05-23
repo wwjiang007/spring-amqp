@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2020 the original author or authors.
+ * Copyright 2002-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -219,6 +219,8 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	private boolean defaultRequeueRejected = true;
 
 	private int prefetchCount = DEFAULT_PREFETCH_COUNT;
+
+	private boolean globalQos;
 
 	private long idleEventInterval;
 
@@ -797,6 +799,7 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	 * Tell the broker how many messages to send to each consumer in a single request.
 	 * Often this can be set quite high to improve throughput.
 	 * @param prefetchCount the prefetch count
+	 * @see com.rabbitmq.client.Channel#basicQos(int, boolean)
 	 */
 	public void setPrefetchCount(int prefetchCount) {
 		this.prefetchCount = prefetchCount;
@@ -809,6 +812,20 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	 */
 	protected int getPrefetchCount() {
 		return this.prefetchCount;
+	}
+
+	/**
+	 * Apply prefetchCount to the entire channel.
+	 * @param globalQos true for a channel-wide prefetch.
+	 * @since 2.2.17
+	 * @see com.rabbitmq.client.Channel#basicQos(int, boolean)
+	 */
+	public void setGlobalQos(boolean globalQos) {
+		this.globalQos = globalQos;
+	}
+
+	protected boolean isGlobalQos() {
+		return this.globalQos;
 	}
 
 	/**
@@ -1281,7 +1298,8 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 	public void shutdown() {
 		synchronized (this.lifecycleMonitor) {
 			if (!isActive()) {
-				logger.info("Shutdown ignored - container is not active already");
+				logger.debug("Shutdown ignored - container is not active already");
+				this.lifecycleMonitor.notifyAll();
 				return;
 			}
 			this.active = false;
@@ -1637,7 +1655,7 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 			}
 		}
 		finally {
-			cleanUpAfterInvoke(resourceHolder, channelToUse, boundHere);
+			cleanUpAfterInvoke(resourceHolder, channelToUse, boundHere); // NOSONAR channel not null here
 		}
 	}
 
@@ -1754,6 +1772,13 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor
 			this.applicationEventPublisher
 					.publishEvent(t == null ? new ListenerContainerConsumerTerminatedEvent(this, reason) :
 							new ListenerContainerConsumerFailedEvent(this, reason, t, fatal));
+		}
+	}
+
+	protected void publishMissingQueueEvent(String queue) {
+		if (this.applicationEventPublisher != null) {
+			this.applicationEventPublisher
+					.publishEvent(new MissingQueueEvent(this, queue));
 		}
 	}
 

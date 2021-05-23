@@ -794,7 +794,7 @@ public class RabbitAdmin implements AmqpAdmin, ApplicationContextAware, Applicat
 		}
 	}
 
-	private <T extends Throwable> void publishDeclarationExceptionEvent(Declarable element, T t) {
+	private <T extends Throwable> void publishDeclarationExceptionEvent(@Nullable Declarable element, T t) {
 		DeclarationExceptionEvent event = new DeclarationExceptionEvent(this, element, t);
 		this.lastDeclarationExceptionEvent = event;
 		if (this.applicationEventPublisher != null) {

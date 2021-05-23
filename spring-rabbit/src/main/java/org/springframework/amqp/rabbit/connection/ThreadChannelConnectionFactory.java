@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2020-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,12 @@
 package org.springframework.amqp.rabbit.connection;
 
 import java.io.IOException;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 import org.aopalliance.aop.Advice;
 import org.aopalliance.intercept.MethodInterceptor;
@@ -27,9 +31,12 @@ import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.rabbit.support.RabbitExceptionTranslator;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.aop.support.NameMatchMethodPointcutAdvisor;
+import org.springframework.lang.Nullable;
+import org.springframework.util.Assert;
 
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ConnectionFactory;
+import com.rabbitmq.client.ShutdownListener;
 
 /**
  * A very simple connection factory that caches a channel per thread. Users are
@@ -37,15 +44,20 @@ import com.rabbitmq.client.ConnectionFactory;
  * {@link #closeThreadChannel()}.
  *
  * @author Gary Russell
- *
  * @since 2.3
  *
  */
-public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
+public class ThreadChannelConnectionFactory extends AbstractConnectionFactory implements ShutdownListener {
+
+	private final Map<UUID, Context> contextSwitches = new ConcurrentHashMap<>();
+
+	private final Map<UUID, Thread> switchesInProgress = new ConcurrentHashMap<>();
 
 	private volatile ConnectionWrapper connection;
 
 	private boolean simplePublisherConfirms;
+
+	private boolean defaultPublisherFactory = true;
 
 	/**
 	 * Construct an instance.
@@ -65,6 +77,15 @@ public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
 		if (!isPublisher) {
 			setPublisherConnectionFactory(new ThreadChannelConnectionFactory(rabbitConnectionFactory, true));
 		}
+		else {
+			this.defaultPublisherFactory = false;
+		}
+	}
+
+	@Override
+	public void setPublisherConnectionFactory(@Nullable AbstractConnectionFactory publisherConnectionFactory) {
+		super.setPublisherConnectionFactory(publisherConnectionFactory);
+		this.defaultPublisherFactory = false;
 	}
 
 	@Override
@@ -78,6 +99,19 @@ public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
 	 */
 	public void setSimplePublisherConfirms(boolean simplePublisherConfirms) {
 		this.simplePublisherConfirms = simplePublisherConfirms;
+		if (this.defaultPublisherFactory) {
+			((ThreadChannelConnectionFactory) getPublisherConnectionFactory())
+				.setSimplePublisherConfirms(simplePublisherConfirms); // NOSONAR
+		}
+	}
+
+	@Override
+	public void addConnectionListener(ConnectionListener listener) {
+		super.addConnectionListener(listener); // handles publishing sub-factory
+		// If the connection is already alive we assume that the new listener wants to be notified
+		if (this.connection != null && this.connection.isOpen()) {
+			listener.onCreate(this.connection);
+		}
 	}
 
 	@Override
@@ -85,6 +119,7 @@ public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
 		if (this.connection == null || !this.connection.isOpen()) {
 			Connection bareConnection = createBareConnection(); // NOSONAR - see destroy()
 			this.connection = new ConnectionWrapper(bareConnection.getDelegate(), getCloseTimeout());
+			getConnectionListener().onCreate(this.connection);
 		}
 		return this.connection;
 	}
@@ -99,6 +134,16 @@ public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
 		}
 	}
 
+	/**
+	 * Close the connection(s). This will impact any in-process operations. New
+	 * connection(s) will be created on demand after this method returns. This might be
+	 * used to force a reconnect to the primary broker after failing over to a secondary
+	 * broker.
+	 */
+	public void resetConnection() {
+		destroy();
+	}
+
 	@Override
 	public synchronized void destroy() {
 		super.destroy();
@@ -106,6 +151,77 @@ public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
 			this.connection.forceClose();
 			this.connection = null;
 		}
+		if (this.switchesInProgress.size() > 0 && this.logger.isWarnEnabled()) {
+			this.logger.warn("Unclaimed context switches from threads:" +
+					this.switchesInProgress.values()
+							.stream()
+							.map(t -> t.getName())
+							.collect(Collectors.toList()));
+		}
+		this.contextSwitches.clear();
+		this.switchesInProgress.clear();
+	}
+
+	/**
+	 * Call to prepare to switch the channel(s) owned by this thread to another thread.
+	 * @return an opaque object representing the context to switch. If there are no channels
+	 * or no open channels assigned to this thread, null is returned.
+	 * @since 2.3.7
+	 * @see #switchContext(Object)
+	 */
+	@Nullable
+	public Object prepareSwitchContext() {
+		return prepareSwitchContext(UUID.randomUUID());
+	}
+
+	@Nullable
+	Object prepareSwitchContext(UUID uuid) {
+		Object pubContext = null;
+		if (getPublisherConnectionFactory() instanceof ThreadChannelConnectionFactory) {
+			pubContext = ((ThreadChannelConnectionFactory) getPublisherConnectionFactory()).prepareSwitchContext(uuid); // NOSONAR
+		}
+		Context context = ((ConnectionWrapper) createConnection()).prepareSwitchContext();
+		if (context.getNonTx() == null && context.getTx() == null) {
+			this.logger.debug("No channels are bound to this thread");
+			return pubContext;
+		}
+		if (this.switchesInProgress.values().contains(Thread.currentThread())) {
+			this.logger
+					.warn("A previous context switch from this thread has not been claimed yet; possible memory leak?");
+		}
+		this.contextSwitches.put(uuid, context);
+		this.switchesInProgress.put(uuid, Thread.currentThread());
+		return uuid;
+	}
+
+	/**
+	 * Acquire ownership of another thread's channel(s) after that thread called
+	 * {@link #prepareSwitchContext()}.
+	 * @param toSwitch the context returned by {@link #prepareSwitchContext()}.
+	 * @since 2.3.7
+	 * @see #prepareSwitchContext()
+	 */
+	public void switchContext(@Nullable Object toSwitch) {
+		if (toSwitch != null) {
+			Assert.state(doSwitch(toSwitch), () -> "No context to switch for " + toSwitch.toString());
+		}
+		else {
+			this.logger.debug("Attempted to switch a null context - no channels to acquire");
+		}
+	}
+
+	boolean doSwitch(Object toSwitch) {
+		boolean switched = false;
+		if (getPublisherConnectionFactory() instanceof ThreadChannelConnectionFactory) {
+			switched = ((ThreadChannelConnectionFactory) getPublisherConnectionFactory()).doSwitch(toSwitch); // NOSONAR
+		}
+		Context context = this.contextSwitches.remove(toSwitch);
+		this.switchesInProgress.remove(toSwitch);
+		if (context != null) {
+			((ConnectionWrapper) createConnection()).switchContext(context);
+			switched = true;
+		}
+		return switched;
 	}
 
 	private final class ConnectionWrapper extends SimpleConnection {
@@ -147,6 +263,7 @@ public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
 					}
 					this.channels.set(channel);
 				}
+				getChannelListener().onCreate(channel, transactional);
 			}
 			return channel;
 		}
@@ -186,7 +303,7 @@ public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
 
 		private void handleClose(Channel channel, boolean transactional) {
 
-			if (ConnectionWrapper.this.channels.get() == null) {
+			if (transactional && this.txChannels.get() == null ? true : this.channels.get() == null) {
 				physicalClose(channel);
 			}
 			else {
@@ -198,7 +315,6 @@ public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
 					else {
 						this.channels.remove();
 					}
-					RabbitUtils.clearPhysicalCloseRequired();
 				}
 			}
 		}
@@ -229,11 +345,65 @@ public class ThreadChannelConnectionFactory extends AbstractConnectionFactory {
 				catch (IOException | TimeoutException e) {
 					logger.debug("Error on close", e);
 				}
+				finally {
+					RabbitUtils.clearPhysicalCloseRequired();
+				}
 			}
 		}
 
 		void forceClose() {
 			super.close();
+			getConnectionListener().onClose(this);
+		}
+
+		Context prepareSwitchContext() {
+			Context context = new Context(this.channels.get(), this.txChannels.get());
+			this.channels.remove();
+			this.txChannels.remove();
+			return context;
+		}
+
+		void switchContext(Context context) {
+			Channel nonTx = context.getNonTx();
+			if (nonTx != null) {
+				doSwitch(nonTx, this.channels);
+			}
+			Channel tx = context.getTx();
+			if (tx != null) {
+				doSwitch(tx, this.txChannels);
+			}
+		}
+
+		private void doSwitch(Channel channel, ThreadLocal<Channel> channelTL) {
+			Channel toClose = channelTL.get();
+			if (toClose != null) {
+				RabbitUtils.setPhysicalCloseRequired(channel, true);
+				physicalClose(toClose);
+			}
+			channelTL.set(channel);
+		}
+
+	}
+
+	private static class Context {
+
+		private final Channel nonTx;
+
+		private final Channel tx;
+
+		Context(@Nullable Channel nonTx, @Nullable Channel tx) {
+			this.nonTx = nonTx;
+			this.tx = tx;
+		}
+
+		@Nullable
+		Channel getNonTx() {
+			return this.nonTx;
+		}
+
+		@Nullable
+		Channel getTx() {
+			return this.tx;
 		}
 
 	}

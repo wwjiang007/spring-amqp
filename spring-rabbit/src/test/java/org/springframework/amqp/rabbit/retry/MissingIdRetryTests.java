@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2020 the original author or authors.
+ * Copyright 2002-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,11 +58,12 @@ import org.springframework.retry.RetryContext;
 import org.springframework.retry.policy.MapRetryContextCache;
 import org.springframework.retry.policy.RetryContextCache;
 import org.springframework.retry.policy.SimpleRetryPolicy;
+import org.springframework.retry.support.RetrySynchronizationManager;
 import org.springframework.retry.support.RetryTemplate;
 
 /**
  * @author Gary Russell
- * @author Arnaud Cogolu?gnes
+ * @author Arnaud Cogoluègnes
  * @since 1.1.2
  *
  */
@@ -83,7 +84,7 @@ public class MissingIdRetryTests {
 		RabbitAvailableCondition.getBrokerRunning().deleteExchanges("retry.test.exchange");
 	}
 
-	@SuppressWarnings({ "rawtypes", "unchecked" })
+	@SuppressWarnings("rawtypes")
 	@Test
 	public void testWithNoId() throws Exception {
 		// 2 messages; each retried once by missing id interceptor
@@ -143,7 +144,8 @@ public class MissingIdRetryTests {
 		RetryContextCache cache = spy(new MapRetryContextCache());
 		retryTemplate.setRetryContextCache(cache);
 		fb.setRetryOperations(retryTemplate);
-		fb.setMessageRecoverer(new RejectAndDontRequeueRecoverer());
+		fb.setMessageRecoverer(new RejectAndDontRequeueRecoverer(() ->
+			"Don't requeue after " + RetrySynchronizationManager.getContext().getRetryCount() + " attempts"));
 
 		Advice retryInterceptor = fb.getObject();
 		container.setAdviceChain(retryInterceptor);

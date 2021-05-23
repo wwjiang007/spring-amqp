@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2020 the original author or authors.
+ * Copyright 2002-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -159,6 +159,10 @@ public class BlockingQueueConsumer {
 	private ApplicationEventPublisher applicationEventPublisher;
 
 	private long consumeDelay;
+
+	private java.util.function.Consumer<String> missingQueuePublisher = str -> { };
+
+	private boolean globalQos;
 
 	private volatile long abortStarted;
 
@@ -375,6 +379,15 @@ public class BlockingQueueConsumer {
 	}
 
 	/**
+	 * Set the publisher for a missing queue event.
+	 * @param missingQueuePublisher the publisher.
+	 * @since 2.1.18
+	 */
+	public void setMissingQueuePublisher(java.util.function.Consumer<String> missingQueuePublisher) {
+		this.missingQueuePublisher = missingQueuePublisher;
+	}
+
+	/**
 	 * Set the consumeDelay - a time to wait before consuming in ms. This is useful when
 	 * using the sharding plugin with {@code concurrency > 1}, to avoid uneven distribution of
 	 * consumers across the shards. See the plugin README for more information.
@@ -392,6 +405,16 @@ public class BlockingQueueConsumer {
 	 */
 	public void clearDeliveryTags() {
 		this.deliveryTags.clear();
+	}
+
+	/**
+	 * Apply prefetch to the entire channel.
+	 * @param globalQos true for a channel-wide prefetch.
+	 * @since 2.2.17
+	 * @see Channel#basicQos(int, boolean)
+	 */
+	public void setGlobalQos(boolean globalQos) {
+		this.globalQos = globalQos;
 	}
 
 	/**
@@ -618,10 +641,8 @@ public class BlockingQueueConsumer {
 			}
 		}
 		if (!this.acknowledgeMode.isAutoAck() && !cancelled()) {
-			// Set basicQos before calling basicConsume (otherwise if we are not acking the broker
-			// will send blocks of 100 messages)
 			try {
-				this.channel.basicQos(this.prefetchCount);
+				this.channel.basicQos(this.prefetchCount, this.globalQos);
 			}
 			catch (IOException e) {
 				this.activeObjectCounter.release(this);
@@ -714,6 +735,7 @@ public class BlockingQueueConsumer {
 				if (logger.isWarnEnabled()) {
 					logger.warn("Failed to declare queue: " + queueName);
 				}
+				this.missingQueuePublisher.accept(queueName);
 				if (!this.channel.isOpen()) {
 					throw new AmqpIOException(e);
 				}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2020 the original author or authors.
+ * Copyright 2002-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import org.springframework.amqp.rabbit.support.RabbitExceptionTranslator;
+import org.springframework.amqp.support.ConditionalExceptionLogger;
 import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.context.ApplicationContext;
@@ -56,6 +57,8 @@ import com.rabbitmq.client.AddressResolver;
 import com.rabbitmq.client.BlockedListener;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.RecoveryListener;
+import com.rabbitmq.client.ShutdownListener;
+import com.rabbitmq.client.ShutdownSignalException;
 import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
 
 /**
@@ -67,7 +70,8 @@ import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
  *
  */
 public abstract class AbstractConnectionFactory implements ConnectionFactory, DisposableBean, BeanNameAware,
-		ApplicationContextAware, ApplicationEventPublisherAware, ApplicationListener<ContextClosedEvent> {
+		ApplicationContextAware, ApplicationEventPublisherAware, ApplicationListener<ContextClosedEvent>,
+		ShutdownListener {
 
 	/**
 	 * The mode used to shuffle the addresses.
@@ -108,6 +112,8 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 	private final CompositeChannelListener channelListener = new CompositeChannelListener();
 
 	private final AtomicInteger defaultConnectionNameStrategyCounter = new AtomicInteger();
+
+	private ConditionalExceptionLogger closeExceptionLogger = new DefaultChannelCloseLogger();
 
 	private AbstractConnectionFactory publisherConnectionFactory;
 
@@ -162,8 +168,21 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 		this.rabbitConnectionFactory = rabbitConnectionFactory;
 	}
 
-	protected final void setPublisherConnectionFactory(
-			AbstractConnectionFactory publisherConnectionFactory) {
+	/**
+	 * Set a custom publisher connection factory; the type does not need to be the same
+	 * as this factory.
+	 * @param publisherConnectionFactory the factory.
+	 * @since 2.3.2
+	 */
+	public void setPublisherConnectionFactory(
+			@Nullable AbstractConnectionFactory publisherConnectionFactory) {
+
+		doSetPublisherConnectionFactory(publisherConnectionFactory);
+	}
+
+	protected final void doSetPublisherConnectionFactory(
+			@Nullable AbstractConnectionFactory publisherConnectionFactory) {
+
 		this.publisherConnectionFactory = publisherConnectionFactory;
 	}
 
@@ -193,7 +212,7 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 
 	@Override
 	public void onApplicationEvent(ContextClosedEvent event) {
-		if (getApplicationContext() == event.getApplicationContext()) {
+		if (getApplicationContext().equals(event.getApplicationContext())) {
 			this.contextStopped = true;
 		}
 		if (this.publisherConnectionFactory != null) {
@@ -466,6 +485,26 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 		}
 	}
 
+	/**
+	 * Set the strategy for logging close exceptions; by default, if a channel is closed due to a failed
+	 * passive queue declaration, it is logged at debug level. Normal channel closes (200 OK) are not
+	 * logged. All others are logged at ERROR level (unless access is refused due to an exclusive consumer
+	 * condition, in which case, it is logged at INFO level).
+	 * @param closeExceptionLogger the {@link ConditionalExceptionLogger}.
+	 * @since 1.5
+	 */
+	public void setCloseExceptionLogger(ConditionalExceptionLogger closeExceptionLogger) {
+		Assert.notNull(closeExceptionLogger, "'closeExceptionLogger' cannot be null");
+		this.closeExceptionLogger = closeExceptionLogger;
+		if (this.publisherConnectionFactory != null) {
+			this.publisherConnectionFactory.setCloseExceptionLogger(closeExceptionLogger);
+		}
+	}
+
+	protected ConnectionNameStrategy getConnectionNameStrategy() {
+		return this.connectionNameStrategy;
+	}
+
 	@Override
 	public void setBeanName(String name) {
 		this.beanName = name;
@@ -559,8 +598,10 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 
 			return connection;
 		}
-		catch (IOException | TimeoutException e) {
-			throw RabbitExceptionTranslator.convertRabbitAccessException(e);
+		catch (IOException | TimeoutException ex) {
+			RuntimeException converted = RabbitExceptionTranslator.convertRabbitAccessException(ex);
+			this.connectionListener.onFailed(ex);
+			throw converted;
 		}
 	}
 
@@ -627,6 +668,19 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 	}
 
 	@Override
+	public void shutdownCompleted(ShutdownSignalException cause) {
+		int protocolClassId = cause.getReason().protocolClassId();
+		if (protocolClassId == RabbitUtils.CHANNEL_PROTOCOL_CLASS_ID_20) {
+			this.closeExceptionLogger.log(this.logger, "Shutdown Signal", cause);
+			getChannelListener().onShutDown(cause);
+		}
+		else if (protocolClassId == RabbitUtils.CONNECTION_PROTOCOL_CLASS_ID_10) {
+			getConnectionListener().onShutDown(cause);
+		}
+
+	}
+
+	@Override
 	public void destroy() {
 		if (this.publisherConnectionFactory != null) {
 			this.publisherConnectionFactory.destroy();
@@ -662,6 +716,41 @@ public abstract class AbstractConnectionFactory implements ConnectionFactory, Di
 		@Override
 		public void handleUnblocked() {
 			this.applicationEventPublisher.publishEvent(new ConnectionUnblockedEvent(this.connection));
+		}
+
+	}
+
+	/**
+	 * Default implementation of {@link ConditionalExceptionLogger} for logging channel
+	 * close exceptions.
+	 * @since 1.5
+	 */
+	private static class DefaultChannelCloseLogger implements ConditionalExceptionLogger {
+
+		DefaultChannelCloseLogger() {
+		}
+
+		@Override
+		public void log(Log logger, String message, Throwable t) {
+			if (t instanceof ShutdownSignalException) {
+				ShutdownSignalException cause = (ShutdownSignalException) t;
+				if (RabbitUtils.isPassiveDeclarationChannelClose(cause)) {
+					if (logger.isDebugEnabled()) {
+						logger.debug(message + ": " + cause.getMessage());
+					}
+				}
+				else if (RabbitUtils.isExclusiveUseChannelClose(cause)) {
+					if (logger.isInfoEnabled()) {
+						logger.info(message + ": " + cause.getMessage());
+					}
+				}
+				else if (!RabbitUtils.isNormalChannelClose(cause)) {
+					logger.error(message + ": " + cause.getMessage());
+				}
+			}
+			else {
+				logger.error("Unexpected invocation of " + getClass() + ", with message: " + message, t);
+			}
 		}
 
 	}

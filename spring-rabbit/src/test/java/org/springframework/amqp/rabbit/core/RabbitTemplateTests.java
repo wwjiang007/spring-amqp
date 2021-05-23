@@ -572,6 +572,13 @@ public class RabbitTemplateTests {
 		ReturnsCallback cb = TestUtils.getPropertyValue(template, "returnsCallback", ReturnsCallback.class);
 		cb.returnedMessage(new ReturnedMessage(null, 0, null, null, null));
 		assertThat(called.get()).isTrue();
+		assertThatIllegalStateException().isThrownBy(() ->
+				template.setReturnCallback(mock(RabbitTemplate.ReturnCallback.class)));
+		RabbitTemplate template2 = new RabbitTemplate();
+		org.springframework.amqp.rabbit.core.RabbitTemplate.ReturnCallback callback =
+				mock(org.springframework.amqp.rabbit.core.RabbitTemplate.ReturnCallback.class);
+		template2.setReturnCallback(callback);
+		template2.setReturnCallback(callback);
 	}
 
 	@SuppressWarnings("serial")

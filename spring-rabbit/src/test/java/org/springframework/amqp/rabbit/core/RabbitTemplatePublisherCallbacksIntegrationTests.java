@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2020 the original author or authors.
+ * Copyright 2002-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -77,7 +77,6 @@ import org.springframework.amqp.utils.test.TestUtils;
 import org.springframework.beans.DirectFieldAccessor;
 import org.springframework.expression.Expression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
-import org.springframework.test.context.junit.jupiter.DisabledIf;
 
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
@@ -88,7 +87,7 @@ import com.rabbitmq.client.ConnectionFactory;
  * @author Gunar Hillert
  * @author Artem Bilan
  * @author Rolf Arne Corneliussen
- * @author Arnaud Cogolu?gnes
+ * @author Arnaud Cogoluègnes
  * @since 1.1
  *
  */
@@ -173,7 +172,9 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests {
 			}
 
 			@Override
-			public Message postProcessMessage(Message message, Correlation correlation) {
+			public Message postProcessMessage(Message message, Correlation correlation, String exch, String rk) {
+				assertThat(exch).isEqualTo("");
+				assertThat(rk).isEqualTo(ROUTE);
 				mppLatch.countDown();
 				return message;
 			}
@@ -384,9 +385,9 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests {
 				Thread.currentThread().interrupt();
 			}
 			template.doSend(channel, "", ROUTE,
-				new SimpleMessageConverter().toMessage("message", new MessageProperties()),
-				false,
-				new CorrelationData("def"));
+					new SimpleMessageConverter().toMessage("message", new MessageProperties()),
+					false,
+					new CorrelationData("def"));
 			threadSentLatch.countDown();
 			return null;
 		}));
@@ -825,14 +826,13 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests {
 	}
 
 	@Test
-	@DisabledIf(expression = "#{systemEnvironment['TRAVIS'] ?: false}", reason = "Overflow needs RabbitMQ 3.7")
 	public void testWithFuture() throws Exception {
 		RabbitAdmin admin = new RabbitAdmin(this.connectionFactory);
 		Queue queue = QueueBuilder.nonDurable()
-						.autoDelete()
-						.maxLength(1)
-						.overflow(Overflow.rejectPublish)
-						.build();
+				.autoDelete()
+				.maxLength(1)
+				.overflow(Overflow.rejectPublish)
+				.build();
 		admin.declareQueue(queue);
 		CorrelationData cd1 = new CorrelationData();
 		this.templateWithConfirmsEnabled.convertAndSend("", queue.getName(), "foo", cd1);
@@ -857,7 +857,7 @@ public class RabbitTemplatePublisherCallbacksIntegrationTests {
 		this.templateWithConfirmsAndReturnsEnabled.convertAndSend("", "NO_QUEUE_HERE", "foo", cd4);
 		assertThat(cd4.getFuture().get(10, TimeUnit.SECONDS).isAck()).isTrue();
 		assertThat(callbackLatch.await(10, TimeUnit.SECONDS)).isTrue();
-		assertThat(cd4.getReturnedMessage()).isNotNull();
+		assertThat(cd4.getReturned()).isNotNull();
 		assertThat(resent.get()).isTrue();
 		assertThat(callbackThreadName.get()).startsWith("spring-rabbit-deferred-pool");
 		admin.deleteQueue(queue.getName());

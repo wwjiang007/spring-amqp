@@ -34,12 +34,17 @@ See <<template-confirms>> for more information.
 When using returns and correlated confirms, the `CorrelationData` now requires a unique `id` property.
 See <<template-confirms>> for more information.
 
+When using direct reply-to, you can now configure the template such that the server does not need to return correlation data with the reply.
+See <<direct-reply-to>> for more information.
+
 ==== Listener Container Changes
 
 A new listener container property `consumeDelay` is now available; it is helpful when using the https://github.com/rabbitmq/rabbitmq-sharding[RabbitMQ Sharding Plugin].
 
 The default `JavaLangErrorHandler` now calls `System.exit(99)`.
 To revert to the previous behavior (do nothing), add a no-op handler.
+
+The containers now support the `globalQos` property to apply the `prefetchCount` globally for the channel rather than for each consumer on the channel.
 
 See <<containerAttributes>> for more information.
 
@@ -52,3 +57,8 @@ See the IMPORTANT note in <<post-processing>> for more information.
 ==== Multiple Broker Support Improvements
 
 See <<multi-rabbit>> for more information.
+
+==== RepublishMessageRecoverer Changes
+
+A new subclass of this recoverer is not provided that supports publisher confirms.
+See <<async-listeners>> for more information.
